@@ -1,0 +1,18 @@
+services:
+  assistant-service:
+    build: .
+    container_name: assistant-service
+    restart: unless-stopped
+    ports:
+      - "8093:8093"
+    env_file:
+      - .env
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8082
+      MENU_SERVICE_URL: http://menu-service:8085
+    networks:
+      - microservices-net
+
+networks:
+  microservices-net:
+    external: true
