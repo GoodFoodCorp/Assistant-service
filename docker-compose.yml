@@ -11,6 +11,7 @@ services:
       ORDER_SERVICE_URL: http://order-service:8082
       MENU_SERVICE_URL: http://menu-service:8085
       PAYMENT_SERVICE_URL: http://payment-service:8086
+      USER_SERVICE_URL: http://user-service:8087
     extra_hosts:
       # Lets the container reach a locally-run AI runtime (e.g. Ollama) on
       # the host via AI_BASE_URL=http://host.docker.internal:PORT — resolves

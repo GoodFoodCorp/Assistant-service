@@ -33,7 +33,8 @@ internal/
 │   │                      # et FakeProvider (démo)
 │   ├── orderclient/       # Client REST vers order-service (JWT transmis)
 │   ├── menuclient/        # Client REST vers menu-service (catalogue public)
-│   └── paymentclient/     # Client REST vers payment-service (carte par défaut)
+│   ├── paymentclient/     # Client REST vers payment-service (carte par défaut)
+│   └── userclient/        # Client REST vers user-service (adresse par défaut)
 └── config/                # Configuration typée depuis l'environnement
 ```
 
@@ -161,6 +162,24 @@ Avec ces deux réglages, `qwen2.5:7b` a été fiable sur des dizaines d'essais
 inexistant). `llama3.2:3b` reste très bien pour la conversation normale
 (sans outils) si la commande par chat ne t'intéresse pas.
 
+**Deux pièges rencontrés en testant en conditions réelles (pas juste en
+théorie), et corrigés :**
+
+- **Le modèle inventait un faux appel d'outil en texte** (« Appelons l'outil :
+  `propose_order("Salade César", "votre_adresse")` ») quand aucun restaurant
+  n'était en contexte. Cause : le prompt mentionnait `propose_order`
+  *inconditionnellement*, même quand l'outil n'était pas réellement proposé
+  au modèle dans cet appel API. Fix : le prompt ne parle de `propose_order`
+  que lorsque l'outil est effectivement offert (`orderingAvailablePrompt`) ;
+  sinon une consigne explicite (`orderingUnavailablePrompt`) lui interdit de
+  prétendre en appeler un.
+- **« livre chez moi » ne résolvait à rien d'exploitable** — le modèle
+  passait `"chez moi"` tel quel comme `delivery_address`. Fix : l'adresse par
+  défaut du client (`user-service`, best-effort comme le reste du contexte)
+  est maintenant injectée dans le prompt quand une commande est possible,
+  avec la consigne de l'utiliser silencieusement (jamais annoncée en texte)
+  quand le client dit « chez moi » ou équivalent.
+
 ---
 
 ## Endpoints
@@ -220,6 +239,7 @@ le chat ») — absent sur une réponse de conversation normale.
 | **order-service** | 🟡 | L'assistant répond sans connaître les commandes du client |
 | **menu-service** | 🟡 | L'assistant répond sans connaître le menu — et ne peut plus proposer de commande (l'outil n'est offert au modèle que si un menu a pu être chargé) |
 | **payment-service** | 🟡 | Une proposition de commande omet juste le moyen de paiement (purement informatif) |
+| **user-service** | 🟡 | « Chez moi » ne se résout plus automatiquement — l'assistant redemande l'adresse en clair |
 | **auth-service** | 🟠 | Aucun appel réseau, mais la route exige un jeton valide |
 
 **Aucune base de données.**

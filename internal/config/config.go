@@ -14,6 +14,7 @@ type Config struct {
 	OrderServiceURL   string
 	MenuServiceURL    string
 	PaymentServiceURL string
+	UserServiceURL    string
 	LogLevel          string
 }
 
@@ -30,6 +31,7 @@ func Load() (*Config, error) {
 		OrderServiceURL:   getEnv("ORDER_SERVICE_URL", "http://order-service:8082"),
 		MenuServiceURL:    getEnv("MENU_SERVICE_URL", "http://menu-service:8085"),
 		PaymentServiceURL: getEnv("PAYMENT_SERVICE_URL", "http://payment-service:8086"),
+		UserServiceURL:    getEnv("USER_SERVICE_URL", "http://user-service:8087"),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
 	}
 	if cfg.JWTSecret == "" {

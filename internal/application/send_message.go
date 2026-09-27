@@ -17,7 +17,7 @@ const (
 
 	proposeOrderTool = "propose_order"
 
-	baseSystemPrompt = `Tu es l'assistant Good Food, un service de livraison de repas.
+	corePrompt = `Tu es l'assistant Good Food, un service de livraison de repas.
 Réponds en français, de façon brève, chaleureuse et utile.
 
 Ton périmètre est strictement limité à Good Food : le menu d'un restaurant,
@@ -28,19 +28,47 @@ culture générale, aide en programmation, etc.), décline poliment en une
 phrase et recentre la conversation sur ce que tu peux faire — ne réponds
 jamais à la question hors-sujet elle-même, même partiellement.
 Si tu ne sais pas répondre à une question qui relève bien de ton périmètre,
-dis-le simplement et propose de contacter le support.
+dis-le simplement et propose de contacter le support.`
 
-Si un menu de restaurant est listé ci-dessous, tu peux préparer une commande
-pour le client avec l'outil propose_order — mais UNIQUEMENT avec des plats
-qui apparaissent réellement dans ce menu (jamais un plat inventé).
+	// Appended only when the propose_order tool is actually offered to the
+	// model for this request (a restaurant's menu is in view) — the model
+	// must never be told it can order when the tool isn't really available,
+	// or it fabricates a fake function call as plain text instead.
+	orderingAvailablePrompt = `
+
+Tu peux préparer une commande pour le client avec l'outil propose_order —
+mais UNIQUEMENT avec des plats qui apparaissent réellement dans le menu
+ci-dessus (jamais un plat inventé).
+
+Si le client dit "chez moi", "mon adresse habituelle" ou équivalent, et
+qu'une adresse par défaut est indiquée ci-dessus, c'est une information
+SUFFISANTE — ne redemande jamais cette adresse, et n'annonce pas non plus au
+client quelle adresse tu vas utiliser : utilise-la en silence, directement
+comme argument de l'outil, exactement comme si le client l'avait tapée lui-
+même. Ne l'écris JAMAIS dans ta réponse en texte, sous quelque forme que ce
+soit (ni en phrase, ni en JSON, ni en code) — appelle l'outil directement.
 
 Dès que tu connais à la fois le ou les plats ET l'adresse de livraison
 exacte, appelle IMMÉDIATEMENT l'outil propose_order — n'écris PAS de message
-demandant "voulez-vous confirmer ?" ou récapitulant la commande toi-même :
-l'appel de l'outil affiche déjà au client un récapitulatif avec un bouton de
-confirmation, c'est lui, pas toi, qui gère cette étape. Ton seul rôle avant
-d'appeler l'outil est de réunir les informations manquantes (plat, adresse) ;
-dès qu'elles sont réunies, appelle l'outil au lieu de répondre par du texte.`
+demandant "voulez-vous confirmer ?", ne récapitule pas la commande toi-même,
+et n'écris JAMAIS de texte ressemblant à un appel de fonction ou à du code
+(ex. propose_order("...")) : l'appel réel de l'outil affiche déjà au client
+un récapitulatif avec un bouton de confirmation, c'est lui, pas toi, qui gère
+cette étape. Ton seul rôle avant d'appeler l'outil est de réunir les
+informations manquantes (plat, adresse) ; dès qu'elles sont réunies, appelle
+l'outil au lieu de répondre par du texte.`
+
+	// Appended when no restaurant is in view — without this, a model that has
+	// seen propose_order mentioned earlier in the conversation (or knows the
+	// concept from training) may try to "call" it anyway as plain text, even
+	// though it was never actually offered as a tool for this request.
+	orderingUnavailablePrompt = `
+
+Tu ne peux PAS préparer de commande dans cette conversation : aucun outil de
+commande ne t'est proposé ici (le client n'a pas de restaurant ouvert). Si le
+client demande à commander quelque chose, dis-lui simplement d'ouvrir la page
+d'un restaurant d'abord — n'écris jamais de texte ressemblant à un appel de
+fonction ou à du code, et ne prétends jamais avoir préparé une commande.`
 )
 
 type SendMessageInput struct {
@@ -80,12 +108,12 @@ func (uc *UseCases) SendMessage(ctx context.Context, actor Actor, in SendMessage
 		history = history[len(history)-maxHistoryMessages:]
 	}
 
-	menu, systemPrompt := uc.buildContext(ctx, actor, in.RestaurantID)
+	menu, systemPrompt, orderingEnabled := uc.buildContext(ctx, actor, in.RestaurantID)
 	system := domain.Message{Role: domain.RoleSystem, Content: systemPrompt}
 	full := append([]domain.Message{system}, history...)
 
 	var tools []domain.ToolDefinition
-	if in.RestaurantID != "" && len(menu) > 0 {
+	if orderingEnabled {
 		tools = []domain.ToolDefinition{orderProposalTool()}
 	}
 
@@ -100,13 +128,16 @@ func (uc *UseCases) SendMessage(ctx context.Context, actor Actor, in SendMessage
 	return &SendMessageOutput{Content: result.Content}, nil
 }
 
-// buildContext is best-effort: an order-service/menu-service hiccup degrades
-// the answer's context, it never fails the chat itself. It also returns the
-// fetched menu (possibly nil) so the caller can resolve an OrderProposal
-// against it without a second network round-trip.
-func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID string) ([]domain.MenuItemSummary, string) {
+// buildContext is best-effort: an order-service/menu-service/user-service
+// hiccup degrades the answer's context, it never fails the chat itself. It
+// also returns the fetched menu (possibly nil, for OrderProposal resolution
+// without a second round-trip) and whether ordering is actually possible for
+// this request — the ordering instructions and the propose_order tool itself
+// are only ever included when this is true, so the model is never told it
+// can order when it can't.
+func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID string) ([]domain.MenuItemSummary, string, bool) {
 	var b strings.Builder
-	b.WriteString(baseSystemPrompt)
+	b.WriteString(corePrompt)
 
 	if orders, err := uc.orders.RecentOrders(ctx, actor.Token); err == nil && len(orders) > 0 {
 		b.WriteString("\n\nCommandes récentes du client :\n")
@@ -130,7 +161,17 @@ func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID 
 		}
 	}
 
-	return menu, b.String()
+	orderingEnabled := len(menu) > 0
+	if orderingEnabled {
+		if address, err := uc.addresses.DefaultAddress(ctx, actor.Token); err == nil && address != "" {
+			fmt.Fprintf(&b, "\n\nAdresse de livraison par défaut du client : %s\n", address)
+		}
+		b.WriteString(orderingAvailablePrompt)
+	} else {
+		b.WriteString(orderingUnavailablePrompt)
+	}
+
+	return menu, b.String(), orderingEnabled
 }
 
 func orderProposalTool() domain.ToolDefinition {

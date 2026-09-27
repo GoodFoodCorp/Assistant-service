@@ -59,12 +59,22 @@ func (f *fakePayments) DefaultPaymentMethod(_ context.Context, _ string) (string
 	return f.method, f.err
 }
 
-func setup() (*UseCases, *fakeLLM, *fakeOrders, *fakeMenu, *fakePayments) {
+type fakeAddresses struct {
+	address string
+	err     error
+}
+
+func (f *fakeAddresses) DefaultAddress(_ context.Context, _ string) (string, error) {
+	return f.address, f.err
+}
+
+func setup() (*UseCases, *fakeLLM, *fakeOrders, *fakeMenu, *fakePayments, *fakeAddresses) {
 	llm := &fakeLLM{}
 	orders := &fakeOrders{}
 	menu := &fakeMenu{}
 	payments := &fakePayments{}
-	return NewUseCases(llm, orders, menu, payments), llm, orders, menu, payments
+	addresses := &fakeAddresses{}
+	return NewUseCases(llm, orders, menu, payments, addresses), llm, orders, menu, payments, addresses
 }
 
 var customer = Actor{UserID: "cust-1", RoleSlugs: []string{"user"}, Token: "tok"}
@@ -77,7 +87,7 @@ func toolCallArgs(t *testing.T, args proposeOrderArgs) string {
 }
 
 func TestSendMessageRejectsEmptyHistory(t *testing.T) {
-	uc, _, _, _, _ := setup()
+	uc, _, _, _, _, _ := setup()
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{})
 	var derr *domain.Error
 	require.ErrorAs(t, err, &derr)
@@ -85,7 +95,7 @@ func TestSendMessageRejectsEmptyHistory(t *testing.T) {
 }
 
 func TestSendMessageRejectsWhenLastMessageIsNotFromUser(t *testing.T) {
-	uc, _, _, _, _ := setup()
+	uc, _, _, _, _, _ := setup()
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleAssistant, Content: "salut"}},
 	})
@@ -95,7 +105,7 @@ func TestSendMessageRejectsWhenLastMessageIsNotFromUser(t *testing.T) {
 }
 
 func TestSendMessageRejectsEmptyContent(t *testing.T) {
-	uc, _, _, _, _ := setup()
+	uc, _, _, _, _, _ := setup()
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleUser, Content: "   "}},
 	})
@@ -105,7 +115,7 @@ func TestSendMessageRejectsEmptyContent(t *testing.T) {
 }
 
 func TestSendMessageRejectsOversizedContent(t *testing.T) {
-	uc, _, _, _, _ := setup()
+	uc, _, _, _, _, _ := setup()
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleUser, Content: strings.Repeat("a", maxMessageChars+1)}},
 	})
@@ -115,7 +125,7 @@ func TestSendMessageRejectsOversizedContent(t *testing.T) {
 }
 
 func TestSendMessageHappyPath(t *testing.T) {
-	uc, llm, _, _, _ := setup()
+	uc, llm, _, _, _, _ := setup()
 	llm.result = domain.CompletionResult{Content: "Bonjour !"}
 	out, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleUser, Content: "Bonjour"}},
@@ -129,7 +139,7 @@ func TestSendMessageHappyPath(t *testing.T) {
 }
 
 func TestSendMessageTruncatesLongHistory(t *testing.T) {
-	uc, llm, _, _, _ := setup()
+	uc, llm, _, _, _, _ := setup()
 	messages := make([]domain.Message, 0, maxHistoryMessages+10)
 	for i := 0; i < maxHistoryMessages+9; i++ {
 		messages = append(messages, domain.Message{Role: domain.RoleUser, Content: "msg"})
@@ -142,7 +152,7 @@ func TestSendMessageTruncatesLongHistory(t *testing.T) {
 }
 
 func TestSendMessageIncludesOrderContext(t *testing.T) {
-	uc, llm, orders, _, _ := setup()
+	uc, llm, orders, _, _, _ := setup()
 	orders.orders = []domain.OrderSummary{
 		{ID: "order-123456789", Status: "CONFIRMED", TotalAmountCents: 1299, ItemNames: []string{"Burger"}},
 	}
@@ -156,7 +166,7 @@ func TestSendMessageIncludesOrderContext(t *testing.T) {
 }
 
 func TestSendMessageIncludesMenuContextWhenRestaurantGiven(t *testing.T) {
-	uc, llm, _, menu, _ := setup()
+	uc, llm, _, menu, _, _ := setup()
 	menu.items = []domain.MenuItemSummary{
 		{ID: "item-1", Name: "Pizza Margherita", Category: "Pizzas", PriceCents: 1499, Available: true},
 		{ID: "item-2", Name: "Plat retiré", Category: "Pizzas", PriceCents: 999, Available: false},
@@ -172,7 +182,7 @@ func TestSendMessageIncludesMenuContextWhenRestaurantGiven(t *testing.T) {
 }
 
 func TestSendMessageOffersOrderToolOnlyWithAMenu(t *testing.T) {
-	uc, llm, _, menu, _ := setup()
+	uc, llm, _, menu, _, _ := setup()
 	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger", PriceCents: 1000, Available: true}}
 
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
@@ -182,6 +192,8 @@ func TestSendMessageOffersOrderToolOnlyWithAMenu(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, llm.lastTools, 1)
 	assert.Equal(t, proposeOrderTool, llm.lastTools[0].Name)
+	assert.Contains(t, llm.lastMessages[0].Content, "propose_order",
+		"the ordering instructions must be in the prompt exactly when the tool is offered")
 
 	_, err = uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
@@ -190,8 +202,45 @@ func TestSendMessageOffersOrderToolOnlyWithAMenu(t *testing.T) {
 	assert.Empty(t, llm.lastTools, "no restaurant in view — nothing to order from")
 }
 
+// Regression test: a real conversation once had the model fabricate a fake
+// propose_order(...) call as plain text when no restaurant was in view,
+// because the prompt mentioned the tool unconditionally. The prompt must now
+// explicitly tell the model ordering is unavailable instead of staying
+// silent about it.
+func TestSendMessagePromptForbidsFakingToolCallsWhenOrderingUnavailable(t *testing.T) {
+	uc, llm, _, _, _, _ := setup()
+	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "commande-moi un burger"}},
+	})
+	require.NoError(t, err)
+	systemMsg := llm.lastMessages[0].Content
+	assert.Contains(t, systemMsg, "Tu ne peux PAS préparer de commande")
+	assert.NotContains(t, systemMsg, "propose_order",
+		"the tool must not even be named in the prompt when it isn't actually offered")
+}
+
+func TestSendMessageIncludesDefaultAddressOnlyWhenOrderingIsAvailable(t *testing.T) {
+	uc, llm, _, menu, _, addresses := setup()
+	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger", PriceCents: 1000, Available: true}}
+	addresses.address = "12 rue de Paris, 75001 Paris"
+
+	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages:     []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
+		RestaurantID: "resto-1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, llm.lastMessages[0].Content, "12 rue de Paris, 75001 Paris")
+
+	_, err = uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, llm.lastMessages[0].Content, "12 rue de Paris",
+		"no point fetching/showing the saved address when there's nothing to order")
+}
+
 func TestSendMessageDegradesGracefullyWhenContextFetchFails(t *testing.T) {
-	uc, _, orders, menu, _ := setup()
+	uc, _, orders, menu, _, _ := setup()
 	orders.err = errors.New("order-service unreachable")
 	menu.err = errors.New("menu-service unreachable")
 	out, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
@@ -203,7 +252,7 @@ func TestSendMessageDegradesGracefullyWhenContextFetchFails(t *testing.T) {
 }
 
 func TestSendMessageWrapsLLMFailureAsUpstreamError(t *testing.T) {
-	uc, llm, _, _, _ := setup()
+	uc, llm, _, _, _, _ := setup()
 	llm.err = errors.New("boom")
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages: []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
@@ -216,7 +265,7 @@ func TestSendMessageWrapsLLMFailureAsUpstreamError(t *testing.T) {
 // ── propose_order tool handling ─────────────────────────────
 
 func TestSendMessageResolvesOrderProposalAgainstRealMenu(t *testing.T) {
-	uc, llm, _, menu, payments := setup()
+	uc, llm, _, menu, payments, _ := setup()
 	menu.items = []domain.MenuItemSummary{
 		{ID: "item-1", Name: "Burger Deluxe", PriceCents: 1299, Available: true},
 	}
@@ -247,7 +296,7 @@ func TestSendMessageResolvesOrderProposalAgainstRealMenu(t *testing.T) {
 }
 
 func TestSendMessageRefusesProposalForItemNotOnMenu(t *testing.T) {
-	uc, llm, _, menu, _ := setup()
+	uc, llm, _, menu, _, _ := setup()
 	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger Deluxe", PriceCents: 1299, Available: true}}
 	llm.result = domain.CompletionResult{ToolCall: &domain.ToolCall{
 		Name: proposeOrderTool,
@@ -267,7 +316,7 @@ func TestSendMessageRefusesProposalForItemNotOnMenu(t *testing.T) {
 }
 
 func TestSendMessageRefusesProposalWithoutDeliveryAddress(t *testing.T) {
-	uc, llm, _, menu, _ := setup()
+	uc, llm, _, menu, _, _ := setup()
 	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger Deluxe", PriceCents: 1299, Available: true}}
 	llm.result = domain.CompletionResult{ToolCall: &domain.ToolCall{
 		Name: proposeOrderTool,
@@ -291,7 +340,7 @@ func TestSendMessageProposalNeverExecutesAnOrder(t *testing.T) {
 	// order. There is no OrdersProvider.Create in this port at all, so this
 	// test mainly documents the guarantee: assert the fake order repository
 	// (RecentOrders-only) was the sole orders interaction.
-	uc, llm, orders, menu, _ := setup()
+	uc, llm, orders, menu, _, _ := setup()
 	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger Deluxe", PriceCents: 1299, Available: true}}
 	llm.result = domain.CompletionResult{ToolCall: &domain.ToolCall{
 		Name: proposeOrderTool,

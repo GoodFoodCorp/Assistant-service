@@ -37,3 +37,10 @@ type MenuProvider interface {
 type PaymentMethodsProvider interface {
 	DefaultPaymentMethod(ctx context.Context, token string) (string, error)
 }
+
+// AddressProvider fetches the customer's default saved address from
+// user-service, so "chez moi" / "mon adresse habituelle" resolves to a real
+// address instead of being passed through to order-service as-is.
+type AddressProvider interface {
+	DefaultAddress(ctx context.Context, token string) (string, error)
+}
