@@ -58,6 +58,57 @@ internal/
 
 ---
 
+## Garde-fous du prompt système (éviter que l'IA dérive)
+
+Tout le comportement de l'assistant tient dans une seule constante,
+`baseSystemPrompt` (`internal/application/send_message.go`), envoyée comme
+message `system` avant l'historique à **chaque** appel :
+
+```
+Tu es l'assistant Good Food, un service de livraison de repas.
+Réponds en français, de façon brève, chaleureuse et utile.
+
+Ton périmètre est strictement limité à Good Food : le menu d'un restaurant,
+le statut ou l'historique d'une commande, les codes promo, la livraison, ou
+le fonctionnement du service.
+Pour toute question hors de ce périmètre (recette de cuisine, actualité,
+culture générale, aide en programmation, etc.), décline poliment en une
+phrase et recentre la conversation sur ce que tu peux faire — ne réponds
+jamais à la question hors-sujet elle-même, même partiellement.
+Si tu ne sais pas répondre à une question qui relève bien de ton périmètre,
+dis-le simplement et propose de contacter le support.
+```
+
+Le contexte commandes/menu (voir « Fonctionnalités ») est **ajouté à la
+suite** de ce texte avant chaque appel.
+
+**Tester le garde-fou** (avec un jeton valide) :
+
+```bash
+# Doit décliner poliment, sans répondre sur le fond
+curl -s -X POST http://localhost:8093/api/chat/messages \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Dis moi une recette de cuisine"}]}'
+
+# Doit répondre normalement — sujet dans le périmètre
+curl -s -X POST http://localhost:8093/api/chat/messages \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Où en est ma commande ?"}]}'
+```
+
+**Le modifier** : éditer `baseSystemPrompt`, puis `go build` et
+`docker compose up -d --build` — aucune autre partie du code n'a besoin de
+changer.
+
+> ⚠️ **Ce n'est qu'un garde-fou de prompt, pas un filtre garanti.** Un petit
+> modèle local (ex. `llama3.2`) suit généralement la consigne, mais peut
+> occasionnellement se laisser convaincre par une reformulation insistante
+> ou un jailbreak. Pour un vrai verrou (production, ou un modèle moins
+> obéissant), il faudrait ajouter un filtre côté code — mots-clés ou
+> classification — en plus du prompt. Suffisant pour cette démo.
+
+---
+
 ## Endpoints
 
 | Méthode | Route | Accès |
@@ -114,12 +165,30 @@ docker compose up -d --build
 
 ### Brancher un modèle local avec Ollama (macOS)
 
+**1. Installer et démarrer Ollama.**
+
 ```bash
-brew install ollama       # si pas déjà fait
-ollama pull llama3.2      # ~2 Go, ou tout autre modèle de la bibliothèque Ollama
+brew install ollama        # si pas déjà fait
+brew services start ollama # démarre le service en arrière-plan, au démarrage de la session
+# ou, pour le lancer une seule fois sans le garder en arrière-plan :
+#   ollama serve
 ```
 
-Puis dans `.env` :
+Ollama n'a **ni fenêtre ni icône** : c'est un simple processus qui écoute en
+silence sur `localhost:11434`. Ne pas voir de fenêtre est normal — voir
+« Vérifier que ça tourne vraiment » ci-dessous.
+
+**2. Télécharger un modèle.**
+
+```bash
+ollama pull llama3.2      # ~2 Go — bon compromis rapidité/qualité pour cette démo
+```
+
+D'autres modèles marchent aussi (`ollama pull mistral`, `qwen2.5:3b`, …) —
+voir [ollama.com/library](https://ollama.com/library). Plus le modèle est
+gros, plus les réponses sont lentes.
+
+**3. Configurer `assistant-service`.** Dans `.env` :
 
 ```
 AI_BASE_URL=http://host.docker.internal:11434/v1
@@ -135,6 +204,24 @@ automatique) que sur Linux (sinon absent par défaut).
 ```bash
 docker compose up -d      # recharge la config, pas besoin de --build
 ```
+
+**4. Vérifier que ça tourne vraiment.**
+
+```bash
+ollama ps                                    # modèle chargé en mémoire (GPU/CPU), ou rien si inactif depuis 5 min
+ps aux | grep ollama                         # le(s) processus, en arrière-plan
+curl http://localhost:11434/api/tags         # liste des modèles installés
+docker logs assistant-service --tail 5       # doit logger "AI provider configured", pas "FakeProvider"
+```
+
+Pour se convaincre que c'est un vrai modèle et pas une réponse en dur : poser
+**deux fois la même question ouverte** (ex. « recommande-moi un plat au
+hasard ») — une vraie IA varie sa réponse à chaque appel, le `FakeProvider`
+du mode démo renvoie toujours le même texte.
+
+Ollama décharge le modèle de la mémoire après ~5 min d'inactivité (normal,
+`ollama ps` est alors vide) — il se recharge automatiquement (quelques
+secondes) dès la question suivante.
 
 ### Variables d'environnement
 
