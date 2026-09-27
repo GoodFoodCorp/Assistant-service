@@ -219,24 +219,31 @@ func TestSendMessagePromptForbidsFakingToolCallsWhenOrderingUnavailable(t *testi
 		"the tool must not even be named in the prompt when it isn't actually offered")
 }
 
-func TestSendMessageIncludesDefaultAddressOnlyWhenOrderingIsAvailable(t *testing.T) {
+// Regression test: a customer asked to order while viewing a restaurant,
+// then navigated to their address book mid-conversation — the assistant kept
+// asking for an address that was already saved, because the address was
+// only being fetched when a restaurant (and so the order tool) was also in
+// view. The address must be available regardless: it's useful context (and
+// avoids repeating a question the customer already answered) whether or not
+// an order can actually be placed on this exact request.
+func TestSendMessageIncludesDefaultAddressEvenWithoutARestaurantInView(t *testing.T) {
 	uc, llm, _, menu, _, addresses := setup()
-	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger", PriceCents: 1000, Available: true}}
 	addresses.address = "12 rue de Paris, 75001 Paris"
 
 	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, llm.lastMessages[0].Content, "12 rue de Paris, 75001 Paris",
+		"the address is known context even when there's no restaurant to order from yet")
+
+	menu.items = []domain.MenuItemSummary{{ID: "item-1", Name: "Burger", PriceCents: 1000, Available: true}}
+	_, err = uc.SendMessage(context.Background(), customer, SendMessageInput{
 		Messages:     []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
 		RestaurantID: "resto-1",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, llm.lastMessages[0].Content, "12 rue de Paris, 75001 Paris")
-
-	_, err = uc.SendMessage(context.Background(), customer, SendMessageInput{
-		Messages: []domain.Message{{Role: domain.RoleUser, Content: "salut"}},
-	})
-	require.NoError(t, err)
-	assert.NotContains(t, llm.lastMessages[0].Content, "12 rue de Paris",
-		"no point fetching/showing the saved address when there's nothing to order")
 }
 
 func TestSendMessageDegradesGracefullyWhenContextFetchFails(t *testing.T) {

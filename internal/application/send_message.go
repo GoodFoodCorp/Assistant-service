@@ -66,9 +66,13 @@ l'outil au lieu de répondre par du texte.`
 
 Tu ne peux PAS préparer de commande dans cette conversation : aucun outil de
 commande ne t'est proposé ici (le client n'a pas de restaurant ouvert). Si le
-client demande à commander quelque chose, dis-lui simplement d'ouvrir la page
-d'un restaurant d'abord — n'écris jamais de texte ressemblant à un appel de
-fonction ou à du code, et ne prétends jamais avoir préparé une commande.`
+client demande à commander quelque chose (même s'il a déjà donné un plat ou
+une adresse plus tôt dans la conversation), dis-lui simplement d'ouvrir la
+page d'un restaurant pour continuer — s'il a une adresse par défaut indiquée
+ci-dessus, tu peux la mentionner pour le rassurer qu'elle sera réutilisée,
+mais tu ne dois PAS lui redemander cette adresse ni prétendre avoir préparé
+une commande. N'écris jamais de texte ressemblant à un appel de fonction ou
+à du code.`
 )
 
 type SendMessageInput struct {
@@ -161,11 +165,16 @@ func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID 
 		}
 	}
 
+	// Fetched unconditionally, like recent orders above: the customer's
+	// address is useful context ("j'habite où déjà ?", continuing an order
+	// discussion after navigating off the restaurant page) whether or not
+	// ordering is actually possible on this exact request.
+	if address, err := uc.addresses.DefaultAddress(ctx, actor.Token); err == nil && address != "" {
+		fmt.Fprintf(&b, "\n\nAdresse de livraison par défaut du client : %s\n", address)
+	}
+
 	orderingEnabled := len(menu) > 0
 	if orderingEnabled {
-		if address, err := uc.addresses.DefaultAddress(ctx, actor.Token); err == nil && address != "" {
-			fmt.Fprintf(&b, "\n\nAdresse de livraison par défaut du client : %s\n", address)
-		}
 		b.WriteString(orderingAvailablePrompt)
 	} else {
 		b.WriteString(orderingUnavailablePrompt)
