@@ -12,6 +12,7 @@ import (
 	"goodfood/assistant-service/internal/adapter/llmclient"
 	"goodfood/assistant-service/internal/adapter/menuclient"
 	"goodfood/assistant-service/internal/adapter/orderclient"
+	"goodfood/assistant-service/internal/adapter/paymentclient"
 	"goodfood/assistant-service/internal/application"
 	"goodfood/assistant-service/internal/config"
 )
@@ -35,6 +36,7 @@ func main() {
 		llm,
 		orderclient.New(cfg.OrderServiceURL),
 		menuclient.New(cfg.MenuServiceURL),
+		paymentclient.New(cfg.PaymentServiceURL),
 	)
 
 	router := httpadapter.NewRouter(httpadapter.NewChatHandler(uc), cfg.JWTSecret, log)

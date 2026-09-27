@@ -2,7 +2,8 @@
 // endpoint — this single client works for a local runtime (e.g. Ollama at
 // http://ollama:11434/v1) and for cloud providers (e.g. OpenAI at
 // https://api.openai.com/v1) alike, since they share the same request and
-// response shape. Only the base URL, API key and model name change.
+// response shape, including function/tool calling. Only the base URL, API
+// key and model name change.
 package llmclient
 
 import (
@@ -39,15 +40,37 @@ type Client struct {
 	http    *http.Client
 }
 
+type toolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []toolCall `json:"tool_calls,omitempty"`
+}
+
+type tool struct {
+	Type     string       `json:"type"`
+	Function toolFunction `json:"function"`
+}
+
+type toolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
+	Tools       []tool        `json:"tools,omitempty"`
 }
 
 type chatResponse struct {
@@ -59,19 +82,50 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-func (c *Client) Complete(ctx context.Context, messages []domain.Message) (string, error) {
+func toRequestTools(tools []domain.ToolDefinition) []tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]tool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, tool{
+			Type: "function",
+			Function: toolFunction{
+				Name: t.Name, Description: t.Description, Parameters: t.Parameters,
+			},
+		})
+	}
+	return out
+}
+
+// Temperature: 0.7 for ordinary conversation (varied, natural replies), but
+// much lower whenever a tool is offered — a low temperature is what makes
+// small/local models reliably emit well-formed tool-call JSON instead of
+// garbling the schema, verified empirically against llama3.2 and qwen2.5.
+const (
+	chatTemperature = 0.7
+	toolTemperature = 0.1
+)
+
+func (c *Client) Complete(ctx context.Context, messages []domain.Message, tools []domain.ToolDefinition) (domain.CompletionResult, error) {
 	msgs := make([]chatMessage, 0, len(messages))
 	for _, m := range messages {
 		msgs = append(msgs, chatMessage{Role: m.Role, Content: m.Content})
 	}
-	body, err := json.Marshal(chatRequest{Model: c.model, Messages: msgs, Temperature: 0.7})
+	temperature := chatTemperature
+	if len(tools) > 0 {
+		temperature = toolTemperature
+	}
+	body, err := json.Marshal(chatRequest{
+		Model: c.model, Messages: msgs, Temperature: temperature, Tools: toRequestTools(tools),
+	})
 	if err != nil {
-		return "", err
+		return domain.CompletionResult{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return domain.CompletionResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -80,23 +134,31 @@ func (c *Client) Complete(ctx context.Context, messages []domain.Message) (strin
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("AI endpoint unreachable: %w", err)
+		return domain.CompletionResult{}, fmt.Errorf("AI endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var out chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("invalid AI endpoint response: %w", err)
+		return domain.CompletionResult{}, fmt.Errorf("invalid AI endpoint response: %w", err)
 	}
 	if resp.StatusCode >= 300 {
 		message := out.Error.Message
 		if message == "" {
 			message = fmt.Sprintf("AI endpoint returned %d", resp.StatusCode)
 		}
-		return "", fmt.Errorf("%s", message)
+		return domain.CompletionResult{}, fmt.Errorf("%s", message)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("AI endpoint returned no choices")
+		return domain.CompletionResult{}, fmt.Errorf("AI endpoint returned no choices")
 	}
-	return out.Choices[0].Message.Content, nil
+
+	msg := out.Choices[0].Message
+	if len(msg.ToolCalls) > 0 {
+		tc := msg.ToolCalls[0]
+		return domain.CompletionResult{
+			ToolCall: &domain.ToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
+		}, nil
+	}
+	return domain.CompletionResult{Content: msg.Content}, nil
 }

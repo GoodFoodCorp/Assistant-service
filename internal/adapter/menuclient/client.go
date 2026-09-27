@@ -24,6 +24,7 @@ func New(baseURL string) *Client {
 }
 
 type menuItemResponse struct {
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	PriceCents  int64  `json:"price_cents"`
@@ -61,7 +62,7 @@ func (c *Client) MenuForRestaurant(ctx context.Context, restaurantID string) ([]
 	out := make([]domain.MenuItemSummary, 0, len(items))
 	for _, it := range items {
 		out = append(out, domain.MenuItemSummary{
-			Name: it.Name, Description: it.Description, PriceCents: it.PriceCents,
+			ID: it.ID, Name: it.Name, Description: it.Description, PriceCents: it.PriceCents,
 			Category: it.Category, Available: it.Available,
 		})
 	}

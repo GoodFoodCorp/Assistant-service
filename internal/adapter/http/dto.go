@@ -26,9 +26,42 @@ func (r sendMessageRequest) toMessages() []domain.Message {
 	return out
 }
 
+type proposedItemResponse struct {
+	MenuItemID     string `json:"menu_item_id"`
+	MenuItemName   string `json:"menu_item_name"`
+	Quantity       int    `json:"quantity"`
+	UnitPriceCents int64  `json:"unit_price_cents"`
+}
+
+type orderProposalResponse struct {
+	RestaurantID     string                 `json:"restaurant_id"`
+	Items            []proposedItemResponse `json:"items"`
+	DeliveryAddress  string                 `json:"delivery_address"`
+	TotalAmountCents int64                  `json:"total_amount_cents"`
+	PaymentMethod    string                 `json:"payment_method,omitempty"`
+}
+
+func toProposalResponse(p *domain.OrderProposal) *orderProposalResponse {
+	if p == nil {
+		return nil
+	}
+	items := make([]proposedItemResponse, 0, len(p.Items))
+	for _, it := range p.Items {
+		items = append(items, proposedItemResponse{
+			MenuItemID: it.MenuItemID, MenuItemName: it.MenuItemName,
+			Quantity: it.Quantity, UnitPriceCents: it.UnitPriceCents,
+		})
+	}
+	return &orderProposalResponse{
+		RestaurantID: p.RestaurantID, Items: items, DeliveryAddress: p.DeliveryAddress,
+		TotalAmountCents: p.TotalAmountCents, PaymentMethod: p.PaymentMethod,
+	}
+}
+
 type sendMessageResponse struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role     string                 `json:"role"`
+	Content  string                 `json:"content"`
+	Proposal *orderProposalResponse `json:"proposal,omitempty"`
 }
 
 type errorResponse struct {

@@ -11,6 +11,7 @@ consulté) et interroge un modèle de langage.
 | **Base de données**     | Aucune — service sans état                         |
 | **Port HTTP**           | `8093`                                             |
 | **Fournisseur IA**      | N'importe quel endpoint compatible OpenAI (local ou cloud), ou une passerelle factice hors-ligne |
+| **Function calling**    | Oui — l'assistant peut préparer une commande (`propose_order`), jamais l'exécuter lui-même |
 
 ---
 
@@ -20,14 +21,19 @@ consulté) et interroge un modèle de langage.
 cmd/main.go                # Démarrage, injection des dépendances
 internal/
 ├── domain/                # Message, OrderSummary, MenuItemSummary,
-│                          # erreurs typées, ports (LLMProvider, OrdersProvider, MenuProvider)
+│                          # OrderProposal, ToolCall, erreurs typées,
+│                          # ports (LLMProvider, OrdersProvider, MenuProvider,
+│                          # PaymentMethodsProvider)
 ├── application/           # Cas d'usage unique : SendMessage (construit le
-│                          # contexte, appelle le LLM)
+│                          # contexte, appelle le LLM, résout un éventuel
+│                          # appel à l'outil propose_order contre le vrai menu)
 ├── adapter/
 │   ├── http/              # Routeur chi, middleware JWT, DTO
-│   ├── llmclient/         # Client HTTP compatible OpenAI + FakeProvider (démo)
+│   ├── llmclient/         # Client HTTP compatible OpenAI (+ function calling)
+│   │                      # et FakeProvider (démo)
 │   ├── orderclient/       # Client REST vers order-service (JWT transmis)
-│   └── menuclient/        # Client REST vers menu-service (catalogue public)
+│   ├── menuclient/        # Client REST vers menu-service (catalogue public)
+│   └── paymentclient/     # Client REST vers payment-service (carte par défaut)
 └── config/                # Configuration typée depuis l'environnement
 ```
 
@@ -53,6 +59,11 @@ internal/
 - **Mode démo hors-ligne** : `AI_BASE_URL` vide → une passerelle factice
   (`FakeProvider`) répond avec des messages canned mais contextualisés, pour
   que la bulle de chat reste démontrable sans clé ni serveur IA.
+- **Commander par le chat** (« je veux un burger, livre-le au 12 rue de
+  Paris ») : l'assistant appelle l'outil `propose_order`, dont les arguments
+  sont résolus contre le **vrai** menu (jamais un plat ou un prix inventé par
+  le modèle) et renvoyés comme un `OrderProposal` structuré — voir « Commander
+  par le chat » plus bas pour le détail et les garanties.
 - Historique et longueur de message plafonnés côté serveur (20 messages,
   4000 caractères) pour borner le coût d'un appel.
 
@@ -109,6 +120,49 @@ changer.
 
 ---
 
+## Commander par le chat
+
+Le client peut dire « je veux un burger deluxe, livre-le au 12 rue de
+Paris » et l'assistant prépare la commande — sans jamais la passer lui-même.
+
+**Ce qu'assistant-service fait, et ce qu'il ne fait pas :**
+
+1. Le modèle appelle l'outil `propose_order` avec les plats (noms libres) et
+   l'adresse — seulement si le front a précisé `restaurant_id` (l'outil
+   n'est même pas proposé au modèle sinon).
+2. `resolveProposal` (`internal/application/send_message.go`) résout **chaque
+   plat contre le vrai menu** de `menu-service` — nom exact ou approché,
+   jamais un plat qui n'existe pas. Le prix et l'identifiant viennent
+   **toujours** du menu réel, jamais de ce que le modèle a pu halluciner. Si
+   un plat ne correspond à rien, la conversation continue en texte
+   (« je ne trouve pas ce plat, peux-tu préciser ? ») — **pas de proposition
+   partielle ou approximative**.
+3. Le récapitulatif que le client lit (`formatProposal`) est **généré en Go,
+   déterministe** — jamais par le modèle — donc jamais de total ou de plat
+   halluciné dans ce que le client voit avant de confirmer.
+4. La réponse HTTP inclut un `proposal` structuré (voir « Endpoints »)
+   **en plus** du texte — **`assistant-service` ne crée, ne paie et ne
+   confirme aucune commande.** C'est le front qui, une fois que le client a
+   cliqué sur confirmer, appelle `order-service` par son parcours de
+   checkout habituel (identique à une commande passée depuis le panier).
+
+**Fiabilité du function calling avec un modèle local.** Un petit modèle
+(`llama3.2:3b`) génère souvent un JSON mal formé pour un schéma imbriqué
+(tableau d'objets) — vérifié empiriquement, pas juste en théorie. Deux leviers
+ont réglé le problème :
+- un modèle plus costaud et réputé fiable sur le function calling
+  (`qwen2.5:7b`, ~4.7 Go) ;
+- une température basse (`0.1`, contre `0.7` en conversation normale)
+  spécifiquement quand des outils sont proposés au modèle — voir
+  `llmclient.Client.Complete`.
+
+Avec ces deux réglages, `qwen2.5:7b` a été fiable sur des dizaines d'essais
+(plat simple, plusieurs plats avec quantités, adresse manquante, plat
+inexistant). `llama3.2:3b` reste très bien pour la conversation normale
+(sans outils) si la commande par chat ne t'intéresse pas.
+
+---
+
 ## Endpoints
 
 | Méthode | Route | Accès |
@@ -128,7 +182,30 @@ changer.
 ```
 
 `restaurant_id` est optionnel — à fournir quand le client discute depuis la
-page d'un restaurant, pour que l'assistant connaisse son menu.
+page d'un restaurant, pour que l'assistant connaisse son menu (et puisse
+proposer une commande, voir « Commander par le chat »).
+
+### Réponse
+
+```json
+{
+  "role": "assistant",
+  "content": "Voici ce que je te propose :\n- 1× Burger Deluxe — 12.99€\n...\nJe confirme ?",
+  "proposal": {
+    "restaurant_id": "6380b937-...",
+    "items": [
+      { "menu_item_id": "c81d4cfd-...", "menu_item_name": "Burger Deluxe", "quantity": 1, "unit_price_cents": 1299 }
+    ],
+    "delivery_address": "12 rue de Paris",
+    "total_amount_cents": 1299,
+    "payment_method": "Visa •••• 4242"
+  }
+}
+```
+
+`proposal` n'est présent que lorsque l'assistant a appelé `propose_order` et
+que tous les plats ont été résolus contre le vrai menu (voir « Commander par
+le chat ») — absent sur une réponse de conversation normale.
 
 ---
 
@@ -141,7 +218,8 @@ page d'un restaurant, pour que l'assistant connaisse son menu.
 |---|---|---|
 | **Un endpoint IA compatible OpenAI** (local ou cloud) | 🟡 | Sans `AI_BASE_URL`, le `FakeProvider` répond à la place — mode démo, pas d'échec |
 | **order-service** | 🟡 | L'assistant répond sans connaître les commandes du client |
-| **menu-service** | 🟡 | L'assistant répond sans connaître le menu du restaurant consulté |
+| **menu-service** | 🟡 | L'assistant répond sans connaître le menu — et ne peut plus proposer de commande (l'outil n'est offert au modèle que si un menu a pu être chargé) |
+| **payment-service** | 🟡 | Une proposition de commande omet juste le moyen de paiement (purement informatif) |
 | **auth-service** | 🟠 | Aucun appel réseau, mais la route exige un jeton valide |
 
 **Aucune base de données.**
@@ -181,19 +259,26 @@ silence sur `localhost:11434`. Ne pas voir de fenêtre est normal — voir
 **2. Télécharger un modèle.**
 
 ```bash
-ollama pull llama3.2      # ~2 Go — bon compromis rapidité/qualité pour cette démo
+# Conversation seule (pas de commande par chat) : léger et rapide
+ollama pull llama3.2       # ~2 Go
+
+# Conversation + commande par chat (function calling fiable) : recommandé
+ollama pull qwen2.5:7b     # ~4.7 Go
 ```
 
-D'autres modèles marchent aussi (`ollama pull mistral`, `qwen2.5:3b`, …) —
-voir [ollama.com/library](https://ollama.com/library). Plus le modèle est
-gros, plus les réponses sont lentes.
+`llama3.2:3b` répond très bien en conversation normale, mais génère souvent
+un JSON mal formé dès qu'un outil (function call) lui est proposé — vérifié
+empiriquement, voir « Commander par le chat » plus bas. `qwen2.5:7b` est
+fiable sur les deux. D'autres modèles marchent aussi — voir
+[ollama.com/library](https://ollama.com/library) (chercher ceux avec la
+capacité *tools*). Plus le modèle est gros, plus les réponses sont lentes.
 
 **3. Configurer `assistant-service`.** Dans `.env` :
 
 ```
 AI_BASE_URL=http://host.docker.internal:11434/v1
 AI_API_KEY=
-AI_MODEL=llama3.2
+AI_MODEL=qwen2.5:7b
 ```
 
 `host.docker.internal` est ce qui permet au conteneur d'atteindre Ollama qui

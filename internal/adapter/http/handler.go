@@ -23,7 +23,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	reply, err := h.uc.SendMessage(r.Context(), actorFrom(r), application.SendMessageInput{
+	out, err := h.uc.SendMessage(r.Context(), actorFrom(r), application.SendMessageInput{
 		Messages:     req.toMessages(),
 		RestaurantID: req.RestaurantID,
 	})
@@ -31,5 +31,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sendMessageResponse{Role: domain.RoleAssistant, Content: reply})
+	writeJSON(w, http.StatusOK, sendMessageResponse{
+		Role: domain.RoleAssistant, Content: out.Content, Proposal: toProposalResponse(out.Proposal),
+	})
 }
