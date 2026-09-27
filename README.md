@@ -112,6 +112,30 @@ docker compose up -d --build
 
 ⚠️ `JWT_SECRET` doit être **identique** à celui de `auth-service`.
 
+### Brancher un modèle local avec Ollama (macOS)
+
+```bash
+brew install ollama       # si pas déjà fait
+ollama pull llama3.2      # ~2 Go, ou tout autre modèle de la bibliothèque Ollama
+```
+
+Puis dans `.env` :
+
+```
+AI_BASE_URL=http://host.docker.internal:11434/v1
+AI_API_KEY=
+AI_MODEL=llama3.2
+```
+
+`host.docker.internal` est ce qui permet au conteneur d'atteindre Ollama qui
+tourne sur la machine hôte (pas dans Docker) — `docker-compose.yml` déclare
+`extra_hosts` pour que ça marche aussi bien sur Docker Desktop (Mac/Windows,
+automatique) que sur Linux (sinon absent par défaut).
+
+```bash
+docker compose up -d      # recharge la config, pas besoin de --build
+```
+
 ### Variables d'environnement
 
 | Variable | Requis | Description |
