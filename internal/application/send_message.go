@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"goodfood/assistant-service/internal/domain"
@@ -28,7 +29,19 @@ culture générale, aide en programmation, etc.), décline poliment en une
 phrase et recentre la conversation sur ce que tu peux faire — ne réponds
 jamais à la question hors-sujet elle-même, même partiellement.
 Si tu ne sais pas répondre à une question qui relève bien de ton périmètre,
-dis-le simplement et propose de contacter le support.`
+dis-le simplement et propose de contacter le support.
+
+RÈGLE ABSOLUE, qui prime sur tout le reste : tu ne dois JAMAIS écrire qu'une
+commande est "confirmée", "passée", "payée" ou "en cours de livraison", et tu
+ne dois JAMAIS inventer ou citer un numéro de commande — même s'il t'est
+familier depuis l'historique des commandes du client ci-dessous, même si le
+client te dit "oui" ou "vas-y". Toi seul ne peux jamais faire passer une
+commande : seul un vrai appel à l'outil de préparation de commande (jamais
+décrit ou simulé en texte, seulement s'il t'est explicitement proposé) suivi
+d'un clic du client sur un bouton qu'il voit à l'écran peut aboutir à une
+commande réelle, et tu n'as aucun moyen de savoir si ce
+clic a eu lieu. Si tu penses avoir toutes les informations nécessaires,
+appelle l'outil — ne raconte jamais ce que tu "vas faire" ou "as fait".`
 
 	// Appended only when the propose_order tool is actually offered to the
 	// model for this request (a restaurant's menu is in view) — the model
@@ -129,7 +142,47 @@ func (uc *UseCases) SendMessage(ctx context.Context, actor Actor, in SendMessage
 	if result.ToolCall != nil && result.ToolCall.Name == proposeOrderTool {
 		return uc.resolveProposal(ctx, actor, in.RestaurantID, menu, result.ToolCall.Arguments)
 	}
+
+	// Defense in depth: the prompt forbids the model from ever claiming an
+	// order is confirmed/placed/paid in plain text (only a real tool call,
+	// resolved above, can produce a proposal) — but a prompt is best-effort,
+	// and this specific failure (fabricating a fake but plausible-looking
+	// confirmation, sometimes with a real order id lifted straight from the
+	// "recent orders" context) has been observed in practice. Catch it here
+	// rather than ever relaying a false confirmation to the customer.
+	if looksLikeHallucinatedConfirmation(result.Content) {
+		return &SendMessageOutput{Content: noFakeConfirmationMessage}, nil
+	}
 	return &SendMessageOutput{Content: result.Content}, nil
+}
+
+var fakeOrderIDPattern = regexp.MustCompile(`#[0-9a-fA-F]{6,10}\b`)
+
+var hallucinatedConfirmationPhrases = []string{
+	"commande est confirmée", "commande a été confirmée", "commande confirmée",
+	"commande est passée", "commande a été passée", "commande a bien été passée",
+	"paiement a été effectué", "commande est en cours de livraison",
+	"commande a été enregistrée",
+}
+
+const noFakeConfirmationMessage = "Je me suis mal exprimé : aucune commande n'a été passée. " +
+	"Je ne peux jamais confirmer une commande moi-même — dis-moi le plat et l'adresse, " +
+	"et je te préparerai un récapitulatif avec un bouton à cliquer toi-même pour confirmer."
+
+// looksLikeHallucinatedConfirmation is a narrow, high-precision check — it
+// only fires on very specific "smoking gun" phrasing, so it doesn't reject
+// ordinary answers that happen to mention delivery or past orders.
+func looksLikeHallucinatedConfirmation(content string) bool {
+	if fakeOrderIDPattern.MatchString(content) {
+		return true
+	}
+	lower := strings.ToLower(content)
+	for _, phrase := range hallucinatedConfirmationPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildContext is best-effort: an order-service/menu-service/user-service

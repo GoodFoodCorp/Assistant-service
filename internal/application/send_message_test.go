@@ -269,6 +269,50 @@ func TestSendMessageWrapsLLMFailureAsUpstreamError(t *testing.T) {
 	assert.Equal(t, domain.ErrCodeUpstream, derr.Code)
 }
 
+// Regression test: a real conversation had the model narrate a full fake
+// order confirmation — "commande confirmée", plus an order number lifted
+// straight from the customer's real order history — entirely in plain text,
+// without ever calling propose_order. No proposal means no confirm button,
+// so the customer was told they'd ordered something that never happened.
+// The prompt now forbids this explicitly, but since that's best-effort, this
+// is caught here too regardless of what the model actually says.
+func TestSendMessageCatchesHallucinatedOrderIDInPlainText(t *testing.T) {
+	uc, llm, _, _, _, _ := setup()
+	llm.result = domain.CompletionResult{
+		Content: "La commande est confirmée et sera livrée rapidement ! Numéro de commande : #8bb387ec",
+	}
+	out, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "oui c'est ça"}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, out.Proposal)
+	assert.Equal(t, noFakeConfirmationMessage, out.Content)
+	assert.NotContains(t, out.Content, "8bb387ec")
+}
+
+func TestSendMessageCatchesHallucinatedConfirmationPhraseWithoutAnID(t *testing.T) {
+	uc, llm, _, _, _, _ := setup()
+	llm.result = domain.CompletionResult{Content: "Très bien, votre commande a été confirmée !"}
+	out, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "oui"}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, out.Proposal)
+	assert.Equal(t, noFakeConfirmationMessage, out.Content)
+}
+
+func TestSendMessageDoesNotFlagOrdinaryReplies(t *testing.T) {
+	uc, llm, _, _, _, _ := setup()
+	llm.result = domain.CompletionResult{
+		Content: "Votre commande sera livrée sous 30 à 40 minutes après confirmation du restaurant.",
+	}
+	out, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "quel est le délai de livraison ?"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, llm.result.Content, out.Content, "an ordinary FAQ-style answer must not be flagged")
+}
+
 // ── propose_order tool handling ─────────────────────────────
 
 func TestSendMessageResolvesOrderProposalAgainstRealMenu(t *testing.T) {
