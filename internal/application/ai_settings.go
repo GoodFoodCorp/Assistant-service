@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"net/url"
 	"sync"
 	"time"
 
@@ -129,7 +130,12 @@ func (c *AIConfig) Update(a Actor, in AISettings) (AISettingsView, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if in.APIKey == "" && in.Provider == c.current.Provider {
+	if err := validateBaseURL(in.BaseURL); err != nil {
+		return AISettingsView{}, err
+	}
+	// The saved key only stays with the destination it was entered for: keeping
+	// it for another URL would let it be sent wherever the form points.
+	if in.APIKey == "" && in.Provider == c.current.Provider && in.BaseURL == c.current.BaseURL {
 		in.APIKey = c.current.APIKey
 	}
 	p, err := c.factory(in)
@@ -170,7 +176,25 @@ func (c *AIConfig) Test(ctx context.Context, a Actor) (AITestResult, error) {
 	_, err := c.sw.Complete(ctx, []domain.Message{{Role: domain.RoleUser, Content: "Réponds uniquement : ok"}}, nil)
 	ms := time.Since(start).Milliseconds()
 	if err != nil {
-		return AITestResult{Message: err.Error(), LatencyMS: ms}, nil
+		msg := err.Error()
+		if r := []rune(msg); len(r) > 200 {
+			msg = string(r[:200]) + "…"
+		}
+		return AITestResult{Message: msg, LatencyMS: ms}, nil
 	}
 	return AITestResult{OK: true, Message: "Le modèle répond.", LatencyMS: ms}, nil
+}
+
+// validateBaseURL only allows http(s) endpoints. Private addresses stay
+// allowed on purpose: local runtimes (Ollama, LM Studio) live there, and only
+// an admin can set this.
+func validateBaseURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return domain.NewValidationError("l'URL de l'API doit commencer par http:// ou https://")
+	}
+	return nil
 }

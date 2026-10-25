@@ -105,3 +105,25 @@ func TestComplete_CapsTheLengthOfTheAnswer(t *testing.T) {
 		t.Errorf("max_tokens = %v, want a sensible cap", got["max_tokens"])
 	}
 }
+
+// Security: a redirect must not carry the API key to another host.
+func TestClients_DoNotFollowRedirects(t *testing.T) {
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	for _, provider := range []string{"openai-compatible", "anthropic"} {
+		p, _, err := NewProvider(Settings{Provider: provider, BaseURL: redirector.URL, APIKey: "k", Model: "m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = p.Complete(context.Background(), []domain.Message{{Role: domain.RoleUser, Content: "hi"}}, nil)
+		if hit {
+			t.Fatalf("%s followed a redirect", provider)
+		}
+	}
+}

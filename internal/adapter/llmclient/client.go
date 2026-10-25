@@ -33,7 +33,7 @@ func newClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Timeout: timeout},
+		http:    &http.Client{Timeout: timeout, CheckRedirect: noRedirect},
 	}
 }
 
@@ -183,3 +183,6 @@ func (c *Client) Complete(ctx context.Context, messages []domain.Message, tools 
 }
 
 const unreadableToolCallMessage = "Désolé, je n'ai pas bien compris ta demande. Peux-tu la reformuler ?"
+
+// noRedirect stops a redirect from forwarding the API key to another host.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

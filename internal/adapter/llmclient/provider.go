@@ -107,7 +107,7 @@ func NewProvider(s Settings) (domain.LLMProvider, Description, error) {
 	if p.native == "anthropic" {
 		a := &anthropicClient{
 			baseURL: strings.TrimSuffix(baseURL, "/"), apiKey: apiKey, model: model,
-			http: &http.Client{Timeout: timeout},
+			http: &http.Client{Timeout: timeout, CheckRedirect: noRedirect},
 		}
 		return a, Description{Provider: name, BaseURL: a.baseURL, Model: model}, nil
 	}

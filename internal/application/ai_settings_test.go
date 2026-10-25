@@ -167,3 +167,27 @@ type failingLLM struct{}
 func (failingLLM) Complete(context.Context, []domain.Message, []domain.ToolDefinition) (domain.CompletionResult, error) {
 	return domain.CompletionResult{}, errors.New("boom")
 }
+
+// Security: a saved key must never follow a changed destination.
+func TestAIConfig_KeyIsNotReusedWhenTheBaseURLChanges(t *testing.T) {
+	c, _, _ := newAIConfig(AISettings{})
+	_, err := c.Update(admin, AISettings{Provider: "anthropic", APIKey: "sk-ant-keep", BaseURL: "https://api.anthropic.com"})
+	require.NoError(t, err)
+
+	_, err = c.Update(admin, AISettings{Provider: "anthropic", BaseURL: "https://evil.example.com"})
+	var de *domain.Error
+	require.ErrorAs(t, err, &de, "the key must be re-entered for a new destination")
+}
+
+func TestAIConfig_BaseURLMustBeHTTP(t *testing.T) {
+	c, store, _ := newAIConfig(AISettings{})
+	for _, u := range []string{"file:///etc/passwd", "gopher://x", "ftp://x", "//nohost", "http://"} {
+		_, err := c.Update(admin, AISettings{Provider: "ollama", BaseURL: u})
+		var de *domain.Error
+		require.ErrorAs(t, err, &de, u)
+		assert.Equal(t, domain.ErrCodeValidation, de.Code)
+	}
+	assert.Nil(t, store.saved)
+	_, err := c.Update(admin, AISettings{Provider: "ollama", BaseURL: "http://host.docker.internal:11434/v1"})
+	assert.NoError(t, err, "local runtimes stay allowed")
+}
