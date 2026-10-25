@@ -13,6 +13,7 @@ import (
 	"goodfood/assistant-service/internal/adapter/menuclient"
 	"goodfood/assistant-service/internal/adapter/orderclient"
 	"goodfood/assistant-service/internal/adapter/paymentclient"
+	"goodfood/assistant-service/internal/adapter/restaurantclient"
 	"goodfood/assistant-service/internal/adapter/userclient"
 	"goodfood/assistant-service/internal/application"
 	"goodfood/assistant-service/internal/config"
@@ -26,11 +27,17 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid configuration")
 	}
 
-	llm := llmclient.New(cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel)
-	if cfg.AIBaseURL == "" {
-		log.Warn().Msg("AI_BASE_URL not set — running with the offline demo FakeProvider")
+	llm, desc, err := llmclient.NewProvider(llmclient.Settings{
+		Provider: cfg.AIProvider, BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey,
+		Model: cfg.AIModel, Timeout: cfg.AITimeout,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid AI configuration")
+	}
+	if desc.Provider == "demo" {
+		log.Warn().Msg("no AI provider configured — running with the offline demo FakeProvider")
 	} else {
-		log.Info().Str("ai_base_url", cfg.AIBaseURL).Str("ai_model", cfg.AIModel).Msg("AI provider configured")
+		log.Info().Str("ai_provider", desc.Provider).Str("ai_base_url", desc.BaseURL).Str("ai_model", desc.Model).Msg("AI provider configured")
 	}
 
 	uc := application.NewUseCases(
@@ -39,6 +46,7 @@ func main() {
 		menuclient.New(cfg.MenuServiceURL),
 		paymentclient.New(cfg.PaymentServiceURL),
 		userclient.New(cfg.UserServiceURL),
+		restaurantclient.New(cfg.FranchiseURL),
 	)
 
 	router := httpadapter.NewRouter(httpadapter.NewChatHandler(uc), cfg.JWTSecret, log)

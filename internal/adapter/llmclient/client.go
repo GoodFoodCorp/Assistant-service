@@ -25,11 +25,15 @@ func New(baseURL, apiKey, model string) domain.LLMProvider {
 	if baseURL == "" {
 		return NewFakeProvider()
 	}
+	return newClient(baseURL, apiKey, model, 30*time.Second)
+}
+
+func newClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    &http.Client{Timeout: timeout},
 	}
 }
 
@@ -70,6 +74,7 @@ type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
+	MaxTokens   int           `json:"max_tokens"`
 	Tools       []tool        `json:"tools,omitempty"`
 }
 
@@ -102,6 +107,11 @@ func toRequestTools(tools []domain.ToolDefinition) []tool {
 // much lower whenever a tool is offered — a low temperature is what makes
 // small/local models reliably emit well-formed tool-call JSON instead of
 // garbling the schema, verified empirically against llama3.2 and qwen2.5.
+// maxAnswerTokens caps every answer: an unbounded one (a model asked for its
+// own prompt, or looping) outlives the proxy's timeout and the customer just
+// sees a gateway error. 700 tokens is far more than any reply here needs.
+const maxAnswerTokens = 700
+
 const (
 	chatTemperature = 0.7
 	toolTemperature = 0.1
@@ -117,7 +127,7 @@ func (c *Client) Complete(ctx context.Context, messages []domain.Message, tools 
 		temperature = toolTemperature
 	}
 	body, err := json.Marshal(chatRequest{
-		Model: c.model, Messages: msgs, Temperature: temperature, Tools: toRequestTools(tools),
+		Model: c.model, Messages: msgs, Temperature: temperature, MaxTokens: maxAnswerTokens, Tools: toRequestTools(tools),
 	})
 	if err != nil {
 		return domain.CompletionResult{}, err
@@ -160,5 +170,16 @@ func (c *Client) Complete(ctx context.Context, messages []domain.Message, tools 
 			ToolCall: &domain.ToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
 		}, nil
 	}
+
+	// Small local models sometimes write the call as text instead of emitting
+	// tool_calls (see recover.go): recover it, or at least never relay it raw.
+	if tc := recoverTextToolCall(msg.Content, tools); tc != nil {
+		return domain.CompletionResult{ToolCall: tc}, nil
+	}
+	if looksLikeToolCall(msg.Content, tools) {
+		return domain.CompletionResult{Content: unreadableToolCallMessage}, nil
+	}
 	return domain.CompletionResult{Content: msg.Content}, nil
 }
+
+const unreadableToolCallMessage = "Désolé, je n'ai pas bien compris ta demande. Peux-tu la reformuler ?"

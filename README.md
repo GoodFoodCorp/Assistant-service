@@ -53,11 +53,20 @@ internal/
     (via `menu-service`, catalogue public)
   - un échec de l'un ou l'autre appel **dégrade** la réponse (contexte en
     moins) mais **ne fait jamais échouer** la conversation
-- **Un seul adaptateur pour local ou cloud** : `AI_BASE_URL` pointe vers
-  n'importe quel endpoint qui parle le format « chat completions » façon
-  OpenAI — un Ollama local, LM Studio, OpenAI, ou tout autre fournisseur
-  compatible. Seuls l'URL, la clé et le nom du modèle changent.
-- **Mode démo hors-ligne** : `AI_BASE_URL` vide → une passerelle factice
+- **Local ou cloud, au choix** : `AI_PROVIDER` sélectionne le fournisseur
+  (`ollama`, `lmstudio`, `openai`, `openrouter`, `groq`, `mistral`, `deepseek`,
+  `together`, `gemini`, `anthropic`, ou `openai-compatible` + `AI_BASE_URL` pour
+  tout autre endpoint). Tous parlent le format « chat completions » façon
+  OpenAI, sauf **Anthropic** qui a son propre adaptateur (API Messages
+  native). `AI_BASE_URL` et `AI_MODEL` remplacent les défauts du fournisseur ;
+  la clé `AI_API_KEY` reste côté serveur. Une configuration invalide (fournisseur
+  inconnu, clé manquante) fait échouer le démarrage avec un message explicite.
+  Sans `AI_PROVIDER`, `AI_BASE_URL` seul garde son ancien comportement.
+- **Appels d'outil mal formés** : certains petits modèles locaux écrivent
+  l'appel en texte (`propose_order(...)` ou `{"name": ..., "parameters": ...}`)
+  au lieu d'un vrai `tool_calls`. Le client le récupère quand c'est lisible, et
+  ne le montre jamais tel quel au client sinon.
+- **Mode démo hors-ligne** : `AI_PROVIDER` et `AI_BASE_URL` vides → une passerelle factice
   (`FakeProvider`) répond avec des messages canned mais contextualisés, pour
   que la bulle de chat reste démontrable sans clé ni serveur IA.
 - **Commander par le chat** (« je veux un burger, livre-le au 12 rue de
@@ -65,6 +74,13 @@ internal/
   sont résolus contre le **vrai** menu (jamais un plat ou un prix inventé par
   le modèle) et renvoyés comme un `OrderProposal` structuré — voir « Commander
   par le chat » plus bas pour le détail et les garanties.
+  **Sans restaurant ouvert** (accueil, compte…) : l'assistant connaît la liste
+  des restaurants actifs (`franchise-service`, endpoint public). S'il n'y en a
+  qu'un, il est choisi d'office ; sinon l'outil exige un `restaurant`, résolu
+  côté serveur contre la vraie liste puis contre **son** menu. Garde-fou : le
+  restaurant n'est accepté que si le *client* l'a nommé (ses propres messages,
+  ou un « oui » simple à une suggestion unique) — le modèle ne choisit jamais à
+  sa place. Le récapitulatif affiche le restaurant.
 - Historique et longueur de message plafonnés côté serveur (20 messages,
   4000 caractères) pour borner le coût d'un appel.
 
@@ -235,7 +251,7 @@ le chat ») — absent sur une réponse de conversation normale.
 
 | Dépendance | Type | Conséquence si absente |
 |---|---|---|
-| **Un endpoint IA compatible OpenAI** (local ou cloud) | 🟡 | Sans `AI_BASE_URL`, le `FakeProvider` répond à la place — mode démo, pas d'échec |
+| **Un fournisseur d'IA** (local ou cloud, voir `AI_PROVIDER`) | 🟡 | Sans `AI_PROVIDER` ni `AI_BASE_URL`, le `FakeProvider` répond à la place — mode démo, pas d'échec |
 | **order-service** | 🟡 | L'assistant répond sans connaître les commandes du client |
 | **menu-service** | 🟡 | L'assistant répond sans connaître le menu — et ne peut plus proposer de commande (l'outil n'est offert au modèle que si un menu a pu être chargé) |
 | **payment-service** | 🟡 | Une proposition de commande omet juste le moyen de paiement (purement informatif) |
@@ -296,10 +312,15 @@ capacité *tools*). Plus le modèle est gros, plus les réponses sont lentes.
 **3. Configurer `assistant-service`.** Dans `.env` :
 
 ```
-AI_BASE_URL=http://host.docker.internal:11434/v1
-AI_API_KEY=
+AI_PROVIDER=ollama
 AI_MODEL=qwen2.5:7b
+AI_TIMEOUT_SECONDS=120
 ```
+
+> Les modèles de moins de ~7 milliards de paramètres (ex. `llama3.2` 3B)
+> appellent l'outil de commande à tort et recopient son schéma : préférer
+> `qwen2.5:7b` ou plus. `AI_TIMEOUT_SECONDS=120` couvre le premier message, où
+> Ollama charge le modèle en mémoire.
 
 `host.docker.internal` est ce qui permet au conteneur d'atteindre Ollama qui
 tourne sur la machine hôte (pas dans Docker) — `docker-compose.yml` déclare

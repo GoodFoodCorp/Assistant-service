@@ -74,7 +74,7 @@ func setup() (*UseCases, *fakeLLM, *fakeOrders, *fakeMenu, *fakePayments, *fakeA
 	menu := &fakeMenu{}
 	payments := &fakePayments{}
 	addresses := &fakeAddresses{}
-	return NewUseCases(llm, orders, menu, payments, addresses), llm, orders, menu, payments, addresses
+	return NewUseCases(llm, orders, menu, payments, addresses, &fakeRestaurants{}), llm, orders, menu, payments, addresses
 }
 
 var customer = Actor{UserID: "cust-1", RoleSlugs: []string{"user"}, Token: "tok"}
@@ -217,6 +217,20 @@ func TestSendMessagePromptForbidsFakingToolCallsWhenOrderingUnavailable(t *testi
 	assert.Contains(t, systemMsg, "Tu ne peux PAS préparer de commande")
 	assert.NotContains(t, systemMsg, "propose_order",
 		"the tool must not even be named in the prompt when it isn't actually offered")
+}
+
+// Regression test: asked "vous avez des codes promo ?", the assistant answered
+// "je ne dispose pas de codes promo" although several exist — promo codes are
+// head-office only, so it has no list and must never claim there are none.
+func TestSendMessagePromptForbidsDenyingPromoCodesItCannotSee(t *testing.T) {
+	uc, llm, _, _, _, _ := setup()
+	_, err := uc.SendMessage(context.Background(), customer, SendMessageInput{
+		Messages: []domain.Message{{Role: domain.RoleUser, Content: "vous avez des codes promo ?"}},
+	})
+	require.NoError(t, err)
+	systemMsg := llm.lastMessages[0].Content
+	assert.Contains(t, systemMsg, "pas accès à la liste des codes promo")
+	assert.Contains(t, systemMsg, "N'affirme jamais qu'il n'y en a pas")
 }
 
 // Regression test: a customer asked to order while viewing a restaurant,

@@ -33,6 +33,15 @@ type MenuItemSummary struct {
 	Available   bool
 }
 
+// RestaurantSummary is the slice of a restaurant the assistant needs to let a
+// customer choose one when none is open on their screen.
+type RestaurantSummary struct {
+	ID      string
+	Name    string
+	Address string
+	City    string
+}
+
 // ToolCall is a function-call request from the model — never executed as-is:
 // the application layer resolves it against real data (the actual menu,
 // never whatever price the model may have guessed) before it becomes an
@@ -63,6 +72,7 @@ type ProposedItem struct {
 // as if it had been built by hand from the cart.
 type OrderProposal struct {
 	RestaurantID     string
+	RestaurantName   string // set when the customer chose the restaurant in the conversation
 	Items            []ProposedItem
 	DeliveryAddress  string
 	TotalAmountCents int64

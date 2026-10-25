@@ -31,17 +31,22 @@ jamais à la question hors-sujet elle-même, même partiellement.
 Si tu ne sais pas répondre à une question qui relève bien de ton périmètre,
 dis-le simplement et propose de contacter le support.
 
-RÈGLE ABSOLUE, qui prime sur tout le reste : tu ne dois JAMAIS écrire qu'une
-commande est "confirmée", "passée", "payée" ou "en cours de livraison", et tu
-ne dois JAMAIS inventer ou citer un numéro de commande — même s'il t'est
-familier depuis l'historique des commandes du client ci-dessous, même si le
-client te dit "oui" ou "vas-y". Toi seul ne peux jamais faire passer une
-commande : seul un vrai appel à l'outil de préparation de commande (jamais
-décrit ou simulé en texte, seulement s'il t'est explicitement proposé) suivi
-d'un clic du client sur un bouton qu'il voit à l'écran peut aboutir à une
-commande réelle, et tu n'as aucun moyen de savoir si ce
-clic a eu lieu. Si tu penses avoir toutes les informations nécessaires,
-appelle l'outil — ne raconte jamais ce que tu "vas faire" ou "as fait".`
+Tu n'as pas accès à la liste des codes promo : n'en cite ni n'en invente aucun.
+
+Tu PEUX dire le statut d'une commande listée dans « Commandes récentes du
+client » ci-dessous : ce sont des données réelles, donne-les telles quelles.
+
+RÈGLE ABSOLUE, qui prime sur tout le reste, à propos des commandes : tu ne
+passes jamais de commande toi-même. Tu ne dois JAMAIS écrire qu'une
+NOUVELLE commande est "confirmée", "passée", "payée" ou "en cours de
+livraison" à la suite de cette conversation, ni inventer ou citer un numéro de
+commande qui ne figure pas dans la liste ci-dessous — même si le client te dit "oui" ou
+"vas-y". Seul un vrai appel à l'outil de préparation de commande (jamais décrit
+ou simulé en texte, seulement s'il t'est explicitement proposé) suivi d'un clic
+du client sur un bouton qu'il voit à l'écran peut aboutir à une commande
+réelle, et tu n'as aucun moyen de savoir si ce clic a eu lieu. Si tu penses
+avoir toutes les informations nécessaires, appelle l'outil — ne raconte jamais
+ce que tu "vas faire" ou "as fait".`
 
 	// Appended only when the propose_order tool is actually offered to the
 	// model for this request (a restaurant's menu is in view) — the model
@@ -71,6 +76,39 @@ cette étape. Ton seul rôle avant d'appeler l'outil est de réunir les
 informations manquantes (plat, adresse) ; dès qu'elles sont réunies, appelle
 l'outil au lieu de répondre par du texte.`
 
+	// Appended when no restaurant is open but several exist: the customer picks
+	// one in the conversation, and the system (not the model) resolves it and
+	// its menu afterwards.
+
+	// What the model may say about dishes when it has to choose a restaurant first.
+	acrossNoMenusSentence   = "Tu ne connais pas les menus : ne décris ni ne promets aucun plat, ingrédient ou prix, le système vérifie les plats après ton appel."
+	acrossWithMenusSentence = "Les menus de chaque restaurant sont ci-dessus : sers-t'en pour répondre aux questions sur un plat (description, ingrédients, prix) et n'invente jamais un plat, un ingrédient ou un prix qui n'y figure pas."
+
+	// maxMenuRestaurants bounds how many menus go into the prompt: a few are
+	// useful, a whole network's would drown a small model.
+	maxMenuRestaurants = 3
+
+	orderingAcrossRestaurantsPrompt = `
+
+Aucun restaurant n'est ouvert à l'écran, mais tu peux quand même préparer une
+commande avec l'outil propose_order : il te faut le restaurant (choisi
+UNIQUEMENT parmi la liste ci-dessus), le ou les plats, et l'adresse de
+livraison exacte.
+
+Si le client n'a pas dit quel restaurant, demande-le lui en citant les noms de
+la liste — ne choisis jamais à sa place. {{MENUS}}
+
+Si le client dit "chez moi", "mon adresse habituelle" ou équivalent, et qu'une
+adresse par défaut est indiquée ci-dessus, c'est une information SUFFISANTE :
+utilise-la en silence comme argument de l'outil, sans la redemander ni la
+recopier dans ta réponse.
+
+Dès que tu connais le restaurant, le ou les plats ET l'adresse, appelle
+IMMÉDIATEMENT l'outil — n'écris PAS de message demandant "voulez-vous
+confirmer ?" et n'écris JAMAIS de texte ressemblant à un appel de fonction ou
+à du code : l'appel réel de l'outil affiche déjà au client un récapitulatif
+avec un bouton de confirmation.`
+
 	// Appended when no restaurant is in view — without this, a model that has
 	// seen propose_order mentioned earlier in the conversation (or knows the
 	// concept from training) may try to "call" it anyway as plain text, even
@@ -96,6 +134,9 @@ type SendMessageInput struct {
 type SendMessageOutput struct {
 	Content  string
 	Proposal *domain.OrderProposal
+	// Choices are restaurants the customer can pick with one click — set only
+	// when the assistant is asking which restaurant to order from.
+	Choices []domain.RestaurantSummary
 }
 
 // SendMessage answers the customer's latest message, enriched with their own
@@ -125,38 +166,106 @@ func (uc *UseCases) SendMessage(ctx context.Context, actor Actor, in SendMessage
 		history = history[len(history)-maxHistoryMessages:]
 	}
 
-	menu, systemPrompt, orderingEnabled := uc.buildContext(ctx, actor, in.RestaurantID)
-	system := domain.Message{Role: domain.RoleSystem, Content: systemPrompt}
-	full := append([]domain.Message{system}, history...)
-
-	var tools []domain.ToolDefinition
-	if orderingEnabled {
-		tools = []domain.ToolDefinition{orderProposalTool()}
+	// A bare "oui" / "non" typed under a recap is answered without the model.
+	if reply, ok := typedAnswerToRecap(history); ok {
+		return &SendMessageOutput{Content: reply}, nil
 	}
 
-	result, err := uc.llm.Complete(ctx, full, tools)
+	// Plainly off-topic, or probing the instructions: refused without the model.
+	if reply, ok := offTopicRefusal(last.Content); ok {
+		return &SendMessageOutput{Content: reply}, nil
+	}
+
+	if isLocationQuestion(last.Content) {
+		if list, err := uc.restaurants.ListRestaurants(ctx); err == nil && len(list) > 0 {
+			return &SendMessageOutput{Content: locationReply(list)}, nil
+		}
+	}
+
+	cctx := uc.buildContext(ctx, actor, in.RestaurantID)
+	cctx.customerText = customerWords(history, cctx.restaurants)
+	cctx.prompt += topicReminders(last.Content)
+
+	var tools []domain.ToolDefinition
+	if cctx.mode != orderingOff {
+		tools = []domain.ToolDefinition{orderProposalTool(cctx.mode == orderingAcrossRestaurants)}
+	}
+
+	result, err := uc.complete(ctx, cctx.prompt, history, tools)
 	if err != nil {
 		return nil, domain.NewUpstreamError(err.Error())
 	}
 
-	if result.ToolCall != nil && result.ToolCall.Name == proposeOrderTool {
-		return uc.resolveProposal(ctx, actor, in.RestaurantID, menu, result.ToolCall.Arguments)
+	// The model wrote an order recap itself instead of calling the tool: that
+	// recap has no confirm button and unverified totals. Ask once more, with a
+	// reminder; never show it.
+	if result.ToolCall == nil && looksLikeTextRecap(result.Content) {
+		result, err = uc.complete(ctx, cctx.prompt, withReminderOnLastTurn(history, noTextRecapReminder), tools)
+		if err != nil {
+			return nil, domain.NewUpstreamError(err.Error())
+		}
+		if result.ToolCall == nil && looksLikeTextRecap(result.Content) {
+			return &SendMessageOutput{Content: textRecapFailedMessage}, nil
+		}
 	}
 
-	// Defense in depth: the prompt forbids the model from ever claiming an
+	if result.ToolCall != nil && result.ToolCall.Name == proposeOrderTool {
+		return uc.resolveProposal(ctx, actor, cctx, result.ToolCall.Arguments)
+	}
+
+	if containsCode(result.Content) {
+		return &SendMessageOutput{Content: scopeRefusalMessage}, nil
+	}
+
+	// Defense in depth: the prompt forbids the model from ever claiming a NEW
 	// order is confirmed/placed/paid in plain text (only a real tool call,
 	// resolved above, can produce a proposal) — but a prompt is best-effort,
 	// and this specific failure (fabricating a fake but plausible-looking
-	// confirmation, sometimes with a real order id lifted straight from the
-	// "recent orders" context) has been observed in practice. Catch it here
-	// rather than ever relaying a false confirmation to the customer.
-	if looksLikeHallucinatedConfirmation(result.Content) {
+	// confirmation, or an order id that is not the customer's) has been
+	// observed in practice. Catch it here rather than ever relaying a false
+	// confirmation to the customer. The customer's real order ids are data.
+	if looksLikeHallucinatedConfirmation(result.Content, cctx.knownOrderIDs, isOrderStatusQuestion(last.Content)) {
 		return &SendMessageOutput{Content: noFakeConfirmationMessage}, nil
 	}
-	return &SendMessageOutput{Content: result.Content}, nil
+	return &SendMessageOutput{Content: result.Content, Choices: mentionedRestaurants(cctx, result.Content)}, nil
 }
 
-var fakeOrderIDPattern = regexp.MustCompile(`#[0-9a-fA-F]{6,10}\b`)
+// complete calls the model with the system prompt followed by the history.
+// withReminderOnLastTurn returns a copy of history whose last message carries
+// the reminder: small models obey an instruction next to the customer's words
+// far more than one buried in a long system prompt.
+func withReminderOnLastTurn(history []domain.Message, reminder string) []domain.Message {
+	out := append([]domain.Message(nil), history...)
+	if n := len(out); n > 0 {
+		out[n-1].Content += reminder
+	}
+	return out
+}
+
+func (uc *UseCases) complete(ctx context.Context, systemPrompt string, history []domain.Message, tools []domain.ToolDefinition) (domain.CompletionResult, error) {
+	full := append([]domain.Message{{Role: domain.RoleSystem, Content: systemPrompt}}, history...)
+	return uc.llm.Complete(ctx, full, tools)
+}
+
+// mentionedRestaurants turns a reply that is about choosing a restaurant into
+// clickable choices, when no restaurant is open on screen. A reply naming any
+// restaurant offers all of them: the model may have suggested only one, and
+// the customer must still be able to pick another. A reply naming none (a
+// greeting, an answer) offers no buttons.
+func mentionedRestaurants(cctx chatContext, reply string) []domain.RestaurantSummary {
+	if cctx.mode != orderingAcrossRestaurants || customerNamedOneRestaurant(cctx.restaurants, cctx.customerText) {
+		return nil
+	}
+	folded := foldAccents(reply)
+	for _, r := range cctx.restaurants {
+		if strings.Contains(folded, foldAccents(r.Name)) {
+			return cctx.restaurants
+		}
+	}
+	return nil
+}
+
+var fakeOrderIDPattern = regexp.MustCompile(`#([0-9a-fA-F]{6,10})\b`)
 
 var hallucinatedConfirmationPhrases = []string{
 	"commande est confirmée", "commande a été confirmée", "commande confirmée",
@@ -165,18 +274,30 @@ var hallucinatedConfirmationPhrases = []string{
 	"commande a été enregistrée",
 }
 
+// The interface's own success wording: only ever shown by the interface itself.
+const interfaceSuccessPhrase = "passée avec succès"
+
 const noFakeConfirmationMessage = "Je me suis mal exprimé : aucune commande n'a été passée. " +
 	"Je ne peux jamais confirmer une commande moi-même — dis-moi le plat et l'adresse, " +
 	"et je te préparerai un récapitulatif avec un bouton à cliquer toi-même pour confirmer."
 
 // looksLikeHallucinatedConfirmation is a narrow, high-precision check — it
 // only fires on very specific "smoking gun" phrasing, so it doesn't reject
-// ordinary answers that happen to mention delivery or past orders.
-func looksLikeHallucinatedConfirmation(content string) bool {
-	if fakeOrderIDPattern.MatchString(content) {
-		return true
+// ordinary answers that happen to mention delivery or past orders. An order id
+// is only suspicious when it is not one of the customer's own (known).
+func looksLikeHallucinatedConfirmation(content string, known map[string]bool, statusQuestion bool) bool {
+	for _, m := range fakeOrderIDPattern.FindAllStringSubmatch(content, -1) {
+		if !known[strings.ToLower(m[1])] {
+			return true
+		}
 	}
 	lower := strings.ToLower(content)
+	if strings.Contains(lower, interfaceSuccessPhrase) {
+		return true
+	}
+	if statusQuestion {
+		return false // reporting an existing order's status: "confirmée" is real data
+	}
 	for _, phrase := range hallucinatedConfirmationPhrases {
 		if strings.Contains(lower, phrase) {
 			return true
@@ -185,22 +306,62 @@ func looksLikeHallucinatedConfirmation(content string) bool {
 	return false
 }
 
+// orderingMode says how (if at all) the model may prepare an order for this
+// request — the ordering instructions and the propose_order tool are only ever
+// included when it is possible, so the model is never told it can order when
+// it can't.
+type orderingMode int
+
+const (
+	orderingOff orderingMode = iota
+	// orderingInRestaurant: a restaurant is in view (or is the only one), its
+	// menu is in the prompt.
+	orderingInRestaurant
+	// orderingAcrossRestaurants: nothing is open but several restaurants exist;
+	// the customer names one and the system resolves it after the tool call.
+	orderingAcrossRestaurants
+)
+
+type chatContext struct {
+	prompt         string
+	mode           orderingMode
+	restaurantID   string                     // effective restaurant (the viewed one, or the only one)
+	menu           []domain.MenuItemSummary   // possibly nil, for proposal resolution without a second round-trip
+	restaurants    []domain.RestaurantSummary // set in orderingAcrossRestaurants only
+	customerText   string                     // folded text of the customer's own messages (never the assistant's)
+	defaultAddress string                     // the customer's saved address, to snap the model's retyped copy back to
+	knownOrderIDs  map[string]bool            // short ids (lowercase) of the customer's real recent orders
+}
+
 // buildContext is best-effort: an order-service/menu-service/user-service
-// hiccup degrades the answer's context, it never fails the chat itself. It
-// also returns the fetched menu (possibly nil, for OrderProposal resolution
-// without a second round-trip) and whether ordering is actually possible for
-// this request — the ordering instructions and the propose_order tool itself
-// are only ever included when this is true, so the model is never told it
-// can order when it can't.
-func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID string) ([]domain.MenuItemSummary, string, bool) {
+// hiccup degrades the answer's context, it never fails the chat itself.
+func (uc *UseCases) buildContext(ctx context.Context, actor Actor, viewedRestaurantID string) chatContext {
 	var b strings.Builder
 	b.WriteString(corePrompt)
+	b.WriteString(serviceFacts)
 
+	known := map[string]bool{}
 	if orders, err := uc.orders.RecentOrders(ctx, actor.Token); err == nil && len(orders) > 0 {
-		b.WriteString("\n\nCommandes récentes du client :\n")
+		b.WriteString("\n\nCommandes récentes du client (la plus récente en premier ; « la même chose » ou « pareil » désigne la première) :\n")
 		for _, o := range orders {
+			known[strings.ToLower(shortID(o.ID))] = true
 			fmt.Fprintf(&b, "- #%s : %s, %s, total %.2f€\n",
-				shortID(o.ID), o.Status, strings.Join(o.ItemNames, ", "), float64(o.TotalAmountCents)/100)
+				shortID(o.ID), orderStatusLabel(o.Status), strings.Join(o.ItemNames, ", "), float64(o.TotalAmountCents)/100)
+		}
+	}
+
+	// With no restaurant open, look at which ones exist: a single one is simply
+	// selected; several are offered to the customer to choose from.
+	restaurantID := viewedRestaurantID
+	var choices []domain.RestaurantSummary
+	if restaurantID == "" {
+		if list, err := uc.restaurants.ListRestaurants(ctx); err == nil {
+			switch {
+			case len(list) == 1:
+				restaurantID = list[0].ID
+			case len(list) > 1:
+				choices = list
+			}
 		}
 	}
 
@@ -222,43 +383,123 @@ func (uc *UseCases) buildContext(ctx context.Context, actor Actor, restaurantID 
 	// address is useful context ("j'habite où déjà ?", continuing an order
 	// discussion after navigating off the restaurant page) whether or not
 	// ordering is actually possible on this exact request.
+	savedAddress := ""
 	if address, err := uc.addresses.DefaultAddress(ctx, actor.Token); err == nil && address != "" {
-		fmt.Fprintf(&b, "\n\nAdresse de livraison par défaut du client : %s\n", address)
+		savedAddress = address
+		fmt.Fprintf(&b, "\n\nAdresse de livraison par défaut du client (son domicile, PAS l'adresse d'un restaurant) : %s\nSi le client donne une autre adresse de livraison dans son message, c'est celle-là qu'il faut utiliser : il en a toujours le droit, ne la refuse jamais.\n", address)
 	}
 
-	orderingEnabled := len(menu) > 0
-	if orderingEnabled {
+	cctx := chatContext{restaurantID: restaurantID, menu: menu, defaultAddress: savedAddress, knownOrderIDs: known}
+	switch {
+	case len(menu) > 0:
+		cctx.mode = orderingInRestaurant
 		b.WriteString(orderingAvailablePrompt)
-	} else {
+	case len(choices) > 1:
+		cctx.mode = orderingAcrossRestaurants
+		cctx.restaurants = choices
+		b.WriteString("\n\nRestaurants disponibles :\n")
+		for _, r := range choices {
+			fmt.Fprintf(&b, "- %s\n", describeRestaurant(r))
+		}
+		knowledge := acrossNoMenusSentence
+		if uc.writeMenus(ctx, &b, choices) {
+			knowledge = acrossWithMenusSentence
+		}
+		b.WriteString(strings.Replace(orderingAcrossRestaurantsPrompt, "{{MENUS}}", knowledge, 1))
+	default:
 		b.WriteString(orderingUnavailablePrompt)
 	}
-
-	return menu, b.String(), orderingEnabled
+	cctx.prompt = b.String()
+	return cctx
 }
 
-func orderProposalTool() domain.ToolDefinition {
-	return domain.ToolDefinition{
-		Name: proposeOrderTool,
-		Description: "Prépare une commande à confirmer par le client — n'exécute rien, affiche juste un " +
-			"récapitulatif à valider. N'appelle cette fonction que lorsque tu connais le ou les plats (qui " +
-			"doivent exister dans le menu ci-dessus) ET l'adresse de livraison exacte.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"items": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"name":     map[string]any{"type": "string", "description": "Nom du plat, tel qu'il apparaît dans le menu"},
-							"quantity": map[string]any{"type": "integer", "minimum": 1},
-						},
-						"required": []string{"name", "quantity"},
-					},
+// describeRestaurant is "Name — address, city": the address answers "vous êtes
+// où ?", which was once answered with the customer's own address.
+func describeRestaurant(r domain.RestaurantSummary) string {
+	where := strings.Trim(strings.Join(nonEmpty(r.Address, r.City), ", "), " ,")
+	if where == "" {
+		return r.Name
+	}
+	return r.Name + " — " + where
+}
+
+func nonEmpty(parts ...string) []string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			out = append(out, strings.TrimSpace(p))
+		}
+	}
+	return out
+}
+
+// writeMenus adds each restaurant's menu to the prompt so the model can answer
+// questions about a dish without inventing it, even when no restaurant is
+// open. It does nothing past maxMenuRestaurants (the prompt would drown), skips
+// a restaurant whose menu cannot be loaded, and reports whether any menu was
+// written.
+func (uc *UseCases) writeMenus(ctx context.Context, b *strings.Builder, restaurants []domain.RestaurantSummary) bool {
+	if len(restaurants) > maxMenuRestaurants {
+		return false
+	}
+	wrote := false
+	for _, r := range restaurants {
+		items, err := uc.menu.MenuForRestaurant(ctx, r.ID)
+		if err != nil || len(items) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "\nMenu de %s :\n", r.Name)
+		for _, m := range items {
+			if !m.Available {
+				continue
+			}
+			fmt.Fprintf(b, "- %s (%s) : %.2f€ — %s\n", m.Name, m.Category, float64(m.PriceCents)/100, m.Description)
+		}
+		wrote = true
+	}
+	return wrote
+}
+
+// orderProposalTool describes propose_order. When the customer must name a
+// restaurant (none is open), the tool also requires it.
+func orderProposalTool(withRestaurant bool) domain.ToolDefinition {
+	properties := map[string]any{
+		"items": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":     map[string]any{"type": "string", "description": "Nom du plat, tel qu'il apparaît dans le menu"},
+					"quantity": map[string]any{"type": "integer", "minimum": 1},
 				},
-				"delivery_address": map[string]any{"type": "string", "description": "Adresse de livraison complète"},
+				"required": []string{"name", "quantity"},
 			},
-			"required": []string{"items", "delivery_address"},
+		},
+		"delivery_address": map[string]any{"type": "string", "description": "Adresse de livraison complète"},
+	}
+	required := []string{"items", "delivery_address"}
+	description := "Prépare une commande à confirmer par le client — n'exécute rien, affiche juste un " +
+		"récapitulatif à valider. N'appelle cette fonction que lorsque tu connais le ou les plats (qui " +
+		"doivent exister dans le menu ci-dessus) ET l'adresse de livraison exacte."
+
+	if withRestaurant {
+		properties["restaurant"] = map[string]any{
+			"type":        "string",
+			"description": "Nom du restaurant choisi par le client, parmi la liste des restaurants disponibles",
+		}
+		required = append([]string{"restaurant"}, required...)
+		description = "Prépare une commande à confirmer par le client — n'exécute rien, affiche juste un " +
+			"récapitulatif à valider. N'appelle cette fonction que lorsque tu connais le restaurant (de la " +
+			"liste ci-dessus), le ou les plats ET l'adresse de livraison exacte."
+	}
+
+	return domain.ToolDefinition{
+		Name:        proposeOrderTool,
+		Description: description,
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": properties,
+			"required":   required,
 		},
 	}
 }
@@ -269,6 +510,7 @@ type proposedItemArgs struct {
 }
 
 type proposeOrderArgs struct {
+	Restaurant      string             `json:"restaurant,omitempty"`
 	Items           []proposedItemArgs `json:"items"`
 	DeliveryAddress string             `json:"delivery_address"`
 }
@@ -279,11 +521,30 @@ type proposeOrderArgs struct {
 // from the model. If an item can't be matched, no proposal is returned: the
 // customer sees a message asking them to clarify instead of a silently
 // wrong order.
-func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, restaurantID string, menu []domain.MenuItemSummary, rawArgs string) (*SendMessageOutput, error) {
+func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, cctx chatContext, rawArgs string) (*SendMessageOutput, error) {
 	var args proposeOrderArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return &SendMessageOutput{Content: "Désolé, je n'ai pas réussi à préparer cette commande. Peux-tu reformuler ?"}, nil
 	}
+
+	// With no restaurant open the model names one; it is matched against the
+	// real list and that restaurant's real menu is loaded now. A restaurant
+	// that is open on screen is never overridden by the model.
+	restaurantID, menu, restaurantName := cctx.restaurantID, cctx.menu, ""
+	if cctx.mode == orderingAcrossRestaurants {
+		chosen, reply := pickRestaurant(cctx.restaurants, args.Restaurant, cctx.customerText)
+		if chosen == nil {
+			return &SendMessageOutput{Content: reply, Choices: cctx.restaurants}, nil
+		}
+		items, err := uc.menu.MenuForRestaurant(ctx, chosen.ID)
+		if err != nil || len(items) == 0 {
+			return &SendMessageOutput{
+				Content: fmt.Sprintf("Je n'arrive pas à consulter le menu de %s pour le moment — réessaie dans un instant ou choisis un autre restaurant.", chosen.Name),
+			}, nil
+		}
+		restaurantID, menu, restaurantName = chosen.ID, items, chosen.Name
+	}
+
 	if strings.TrimSpace(args.DeliveryAddress) == "" {
 		return &SendMessageOutput{Content: "Il me manque l'adresse de livraison — à quelle adresse dois-je faire livrer ?"}, nil
 	}
@@ -304,11 +565,10 @@ func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, restaurant
 			}, nil
 		}
 		qty := req.Quantity
-		if qty < 1 {
-			qty = 1
-		}
-		if qty > maxItemQuantity {
-			qty = maxItemQuantity
+		if qty < 1 || qty > maxItemQuantity {
+			return &SendMessageOutput{
+				Content: fmt.Sprintf("La quantité demandée pour « %s » n'est pas valide : je peux préparer de 1 à %d exemplaires. Combien en veux-tu ?", match.Name, maxItemQuantity),
+			}, nil
 		}
 		items = append(items, domain.ProposedItem{
 			MenuItemID: match.ID, MenuItemName: match.Name, Quantity: qty, UnitPriceCents: match.PriceCents,
@@ -319,10 +579,160 @@ func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, restaurant
 	paymentMethod, _ := uc.payments.DefaultPaymentMethod(ctx, actor.Token) // best-effort, "" is fine
 
 	proposal := &domain.OrderProposal{
-		RestaurantID: restaurantID, Items: items, DeliveryAddress: strings.TrimSpace(args.DeliveryAddress),
+		RestaurantID: restaurantID, RestaurantName: restaurantName, Items: items, DeliveryAddress: snapAddress(strings.TrimSpace(args.DeliveryAddress), cctx.defaultAddress),
 		TotalAmountCents: totalCents, PaymentMethod: paymentMethod,
 	}
 	return &SendMessageOutput{Content: formatProposal(proposal), Proposal: proposal}, nil
+}
+
+// pickRestaurant matches what the model (or customer) called a restaurant
+// against the real list, ignoring case and accents. It never guesses: no match
+// or several matches both yield a message asking the customer, and no restaurant.
+func pickRestaurant(list []domain.RestaurantSummary, said, customerText string) (*domain.RestaurantSummary, string) {
+	names := make([]string, 0, len(list))
+	for _, r := range list {
+		names = append(names, r.Name)
+	}
+	available := strings.Join(names, ", ")
+
+	needle := foldAccents(said)
+	if needle == "" {
+		return nil, "Dans quel restaurant souhaites-tu commander ? Je peux te proposer : " + available + "."
+	}
+
+	askWhich := "Dans quel restaurant souhaites-tu commander ? Je peux te proposer : " + available + "."
+
+	var matches []int
+	for i, r := range list {
+		hay := foldAccents(r.Name)
+		if hay == needle {
+			return namedByCustomer(list, i, customerText, askWhich)
+		}
+		if strings.Contains(hay, needle) || strings.Contains(needle, hay) {
+			matches = append(matches, i)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return namedByCustomer(list, matches[0], customerText, askWhich)
+	case 0:
+		return nil, fmt.Sprintf("Je ne trouve pas le restaurant « %s ». Voici ceux qui sont disponibles : %s.", strings.TrimSpace(said), available)
+	default:
+		return nil, askWhich
+	}
+}
+
+// namedByCustomer only accepts the model's choice if the customer themself
+// said something that distinguishes that restaurant from the others (e.g.
+// "République", not the "Good Food" they all share). Without this the model
+// was observed picking a restaurant silently, and the customer could confirm
+// an order placed somewhere they never chose.
+func namedByCustomer(list []domain.RestaurantSummary, chosen int, customerText, askWhich string) (*domain.RestaurantSummary, string) {
+	distinguishing := distinguishingWords(list, chosen)
+	if len(distinguishing) == 0 {
+		return &list[chosen], "" // nothing could tell them apart anyway
+	}
+	for _, w := range distinguishing {
+		if strings.Contains(customerText, w) {
+			return &list[chosen], ""
+		}
+	}
+	return nil, askWhich
+}
+
+// distinguishingWords are the words of the chosen restaurant's name that are
+// not part of every restaurant's name.
+func distinguishingWords(list []domain.RestaurantSummary, chosen int) []string {
+	words := func(name string) []string {
+		return strings.FieldsFunc(foldAccents(name), func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') })
+	}
+	inEvery := map[string]bool{}
+	for _, w := range words(list[0].Name) {
+		inEvery[w] = true
+	}
+	for _, r := range list[1:] {
+		here := map[string]bool{}
+		for _, w := range words(r.Name) {
+			here[w] = true
+		}
+		for w := range inEvery {
+			if !here[w] {
+				delete(inEvery, w)
+			}
+		}
+	}
+	var out []string
+	for _, w := range words(list[chosen].Name) {
+		if len(w) >= 3 && !inEvery[w] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// customerWords is what the customer typed, accent- and case-folded. The
+// assistant's own turns are excluded: it lists restaurant names when asking
+// which one, and that must not count as the customer choosing.
+//
+// One exception: a plain "oui" right after the assistant suggested exactly one
+// restaurant ("tu veux commander chez Good Food République ?") is the customer
+// choosing it, so that restaurant's name is added.
+func customerWords(history []domain.Message, restaurants []domain.RestaurantSummary) string {
+	var b strings.Builder
+	for _, m := range history {
+		if m.Role == domain.RoleUser {
+			b.WriteString(foldAccents(m.Content))
+			b.WriteByte(' ')
+		}
+	}
+
+	if n := len(history); n >= 2 && history[n-1].Role == domain.RoleUser && history[n-2].Role == domain.RoleAssistant &&
+		isPlainYes(history[n-1].Content) {
+		offered := foldAccents(history[n-2].Content)
+		var named []string
+		for _, r := range restaurants {
+			if strings.Contains(offered, foldAccents(r.Name)) {
+				named = append(named, foldAccents(r.Name))
+			}
+		}
+		if len(named) == 1 {
+			b.WriteString(named[0])
+		}
+	}
+	return b.String()
+}
+
+// yesWords are the only words a plain "oui" may be made of: anything else
+// ("oui mais plutôt Montparnasse") says something more than yes.
+var yesWords = map[string]bool{
+	"oui": true, "ok": true, "okay": true, "yes": true, "yep": true, "ouais": true, "ouai": true,
+	"daccord": true, "dac": true, "exactement": true, "parfait": true, "volontiers": true,
+	"merci": true, "svp": true, "stp": true, "go": true, "vas": true, "y": true, "bien": true,
+	"sur": true, "super": true, "nickel": true, "cest": true, "bon": true, "tout": true, "a": true, "fait": true,
+}
+
+func isPlainYes(text string) bool {
+	words := strings.FieldsFunc(foldAccents(strings.ReplaceAll(text, "'", "")), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	if len(words) == 0 || len(words) > 4 {
+		return false
+	}
+	for _, w := range words {
+		if !yesWords[w] {
+			return false
+		}
+	}
+	return true
+}
+
+var accentFolder = strings.NewReplacer(
+	"à", "a", "â", "a", "ä", "a", "é", "e", "è", "e", "ê", "e", "ë", "e",
+	"î", "i", "ï", "i", "ô", "o", "ö", "o", "ù", "u", "û", "u", "ü", "u", "ç", "c", "œ", "oe",
+)
+
+func foldAccents(s string) string {
+	return accentFolder.Replace(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // formatProposal is built deterministically in Go, never by the model —
@@ -330,7 +740,10 @@ func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, restaurant
 // reads just before confirming.
 func formatProposal(p *domain.OrderProposal) string {
 	var b strings.Builder
-	b.WriteString("Voici ce que je te propose :\n")
+	b.WriteString(proposalHeader + "\n")
+	if p.RestaurantName != "" {
+		fmt.Fprintf(&b, "Restaurant : %s\n", p.RestaurantName)
+	}
 	for _, it := range p.Items {
 		fmt.Fprintf(&b, "- %d× %s — %.2f€\n", it.Quantity, it.MenuItemName, float64(it.UnitPriceCents*int64(it.Quantity))/100)
 	}

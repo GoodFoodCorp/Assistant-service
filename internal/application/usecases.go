@@ -12,13 +12,14 @@ type Actor struct {
 }
 
 type UseCases struct {
-	llm       domain.LLMProvider
-	orders    domain.OrdersProvider
-	menu      domain.MenuProvider
-	payments  domain.PaymentMethodsProvider
-	addresses domain.AddressProvider
+	llm         domain.LLMProvider
+	orders      domain.OrdersProvider
+	menu        domain.MenuProvider
+	payments    domain.PaymentMethodsProvider
+	addresses   domain.AddressProvider
+	restaurants domain.RestaurantsProvider
 }
 
-func NewUseCases(llm domain.LLMProvider, orders domain.OrdersProvider, menu domain.MenuProvider, payments domain.PaymentMethodsProvider, addresses domain.AddressProvider) *UseCases {
-	return &UseCases{llm: llm, orders: orders, menu: menu, payments: payments, addresses: addresses}
+func NewUseCases(llm domain.LLMProvider, orders domain.OrdersProvider, menu domain.MenuProvider, payments domain.PaymentMethodsProvider, addresses domain.AddressProvider, restaurants domain.RestaurantsProvider) *UseCases {
+	return &UseCases{llm: llm, orders: orders, menu: menu, payments: payments, addresses: addresses, restaurants: restaurants}
 }

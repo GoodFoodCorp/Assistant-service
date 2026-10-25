@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"goodfood/assistant-service/internal/domain"
@@ -60,6 +61,10 @@ func (c *Client) RecentOrders(ctx context.Context, token string) ([]domain.Order
 		return nil, fmt.Errorf("invalid order-service response: %w", err)
 	}
 
+	// Whatever order order-service lists them in, the assistant must see the
+	// newest first ("pareil que la dernière fois", "où en est ma commande ?").
+	// RFC 3339 timestamps in UTC sort chronologically as plain strings.
+	sort.SliceStable(orders, func(i, j int) bool { return orders[i].PlacedAt > orders[j].PlacedAt })
 	if len(orders) > maxOrders {
 		orders = orders[:maxOrders]
 	}

@@ -35,6 +35,7 @@ type proposedItemResponse struct {
 
 type orderProposalResponse struct {
 	RestaurantID     string                 `json:"restaurant_id"`
+	RestaurantName   string                 `json:"restaurant_name,omitempty"`
 	Items            []proposedItemResponse `json:"items"`
 	DeliveryAddress  string                 `json:"delivery_address"`
 	TotalAmountCents int64                  `json:"total_amount_cents"`
@@ -53,15 +54,33 @@ func toProposalResponse(p *domain.OrderProposal) *orderProposalResponse {
 		})
 	}
 	return &orderProposalResponse{
-		RestaurantID: p.RestaurantID, Items: items, DeliveryAddress: p.DeliveryAddress,
+		RestaurantID: p.RestaurantID, RestaurantName: p.RestaurantName, Items: items, DeliveryAddress: p.DeliveryAddress,
 		TotalAmountCents: p.TotalAmountCents, PaymentMethod: p.PaymentMethod,
 	}
 }
 
+type restaurantChoiceResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	City string `json:"city,omitempty"`
+}
+
 type sendMessageResponse struct {
-	Role     string                 `json:"role"`
-	Content  string                 `json:"content"`
-	Proposal *orderProposalResponse `json:"proposal,omitempty"`
+	Role     string                     `json:"role"`
+	Content  string                     `json:"content"`
+	Proposal *orderProposalResponse     `json:"proposal,omitempty"`
+	Choices  []restaurantChoiceResponse `json:"choices,omitempty"`
+}
+
+func toChoicesResponse(list []domain.RestaurantSummary) []restaurantChoiceResponse {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]restaurantChoiceResponse, 0, len(list))
+	for _, r := range list {
+		out = append(out, restaurantChoiceResponse{ID: r.ID, Name: r.Name, City: r.City})
+	}
+	return out
 }
 
 type errorResponse struct {

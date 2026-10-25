@@ -33,5 +33,6 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, sendMessageResponse{
 		Role: domain.RoleAssistant, Content: out.Content, Proposal: toProposalResponse(out.Proposal),
+		Choices: toChoicesResponse(out.Choices),
 	})
 }

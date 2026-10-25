@@ -44,3 +44,10 @@ type PaymentMethodsProvider interface {
 type AddressProvider interface {
 	DefaultAddress(ctx context.Context, token string) (string, error)
 }
+
+// RestaurantsProvider lists the active restaurants from franchise-service
+// (public endpoint), so a customer who is not on a restaurant's page can still
+// order by naming one.
+type RestaurantsProvider interface {
+	ListRestaurants(ctx context.Context) ([]RestaurantSummary, error)
+}
