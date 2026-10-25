@@ -13,6 +13,9 @@ services:
       PAYMENT_SERVICE_URL: http://payment-service:8086
       USER_SERVICE_URL: http://user-service:8087
       FRANCHISE_SERVICE_URL: http://franchise-service:8089
+    volumes:
+      # Holds the AI provider/key an admin saves from the back-office.
+      - assistant-data:/data
     extra_hosts:
       # Lets the container reach a locally-run AI runtime (e.g. Ollama) on
       # the host via AI_BASE_URL=http://host.docker.internal:PORT — resolves
@@ -21,6 +24,9 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - microservices-net
+
+volumes:
+  assistant-data:
 
 networks:
   microservices-net:

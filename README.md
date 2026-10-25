@@ -373,3 +373,11 @@ go vet ./... && gofmt -l .
 Couvre la validation des messages, le plafonnage de l'historique, l'injection
 du contexte commandes/menu, la dégradation gracieuse quand ce contexte est
 indisponible, et le mode démo. Aucune base ni appel réseau requis.
+
+## Choisir l'IA depuis le back-office (admin)
+
+Un administrateur peut changer le fournisseur, le modèle, l'URL et la clé API sans redémarrer : **Admin → Paramètres → Assistant IA**.
+
+- API : `GET/PUT/DELETE /api/chat/admin/settings/` et `POST /api/chat/admin/settings/test` (rôle `admin` uniquement, 403 sinon).
+- La clé n'est jamais renvoyée (seulement `has_key` et les 4 derniers caractères).
+- Le choix est enregistré dans `AI_SETTINGS_FILE` (défaut `/data/ai-settings.json`, volume `assistant-data`) et **prime sur les variables `AI_*`** au démarrage ; « Revenir à la config serveur » le supprime.

@@ -15,6 +15,7 @@ type Config struct {
 	AIAPIKey          string
 	AIModel           string
 	AITimeout         time.Duration
+	AISettingsFile    string
 	OrderServiceURL   string
 	MenuServiceURL    string
 	PaymentServiceURL string
@@ -36,6 +37,7 @@ func Load() (*Config, error) {
 		AIBaseURL:         getEnv("AI_BASE_URL", ""),
 		AIAPIKey:          os.Getenv("AI_API_KEY"),
 		AIModel:           os.Getenv("AI_MODEL"),
+		AISettingsFile:    getEnv("AI_SETTINGS_FILE", "/data/ai-settings.json"),
 		OrderServiceURL:   getEnv("ORDER_SERVICE_URL", "http://order-service:8082"),
 		MenuServiceURL:    getEnv("MENU_SERVICE_URL", "http://menu-service:8085"),
 		PaymentServiceURL: getEnv("PAYMENT_SERVICE_URL", "http://payment-service:8086"),

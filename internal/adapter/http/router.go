@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(handler *ChatHandler, jwtSecret string, log zerolog.Logger) http.Handler {
+func NewRouter(handler *ChatHandler, admin *AdminHandler, jwtSecret string, log zerolog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chimw.Recoverer)
@@ -25,6 +25,12 @@ func NewRouter(handler *ChatHandler, jwtSecret string, log zerolog.Logger) http.
 	r.Route("/api/chat", func(r chi.Router) {
 		r.Use(Auth(jwtSecret))
 		r.Post("/messages", handler.SendMessage)
+		r.Route("/admin/settings", func(r chi.Router) {
+			r.Get("/", admin.Get)
+			r.Put("/", admin.Put)
+			r.Delete("/", admin.Delete)
+			r.Post("/test", admin.Test)
+		})
 	})
 
 	return r
