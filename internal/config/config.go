@@ -10,6 +10,8 @@ import (
 type Config struct {
 	Port              string
 	JWTSecret         string
+	JWTIssuer         string
+	JWTAudience       string
 	AIProvider        string
 	AIBaseURL         string
 	AIAPIKey          string
@@ -33,6 +35,8 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:              getEnv("PORT", "8093"),
 		JWTSecret:         os.Getenv("JWT_SECRET"),
+		JWTIssuer:         getEnv("JWT_ISSUER", "goodfood-auth"),
+		JWTAudience:       getEnv("JWT_AUDIENCE", "goodfood-api"),
 		AIProvider:        os.Getenv("AI_PROVIDER"),
 		AIBaseURL:         getEnv("AI_BASE_URL", ""),
 		AIAPIKey:          os.Getenv("AI_API_KEY"),

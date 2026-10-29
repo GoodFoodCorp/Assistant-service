@@ -34,12 +34,12 @@ func adminRouter(t *testing.T) http.Handler {
 			return p, err
 		})
 	require.NoError(t, cfg.Init())
-	return NewRouter(NewChatHandler(application.NewUseCases(sw, nil, nil, nil, nil, nil)), NewAdminHandler(cfg), "secret", zerolog.Nop())
+	return NewRouter(NewChatHandler(application.NewUseCases(sw, nil, nil, nil, nil, nil)), NewAdminHandler(cfg), JWTConfig{Secret: "secret", Issuer: "goodfood-auth", Audience: "goodfood-api"}, zerolog.Nop())
 }
 
 func call(t *testing.T, h http.Handler, method, path, role, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "u1", "role_slugs": []string{role}}).SignedString([]byte("secret"))
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "u1", "role_slugs": []string{role}, "typ": "access", "iss": "goodfood-auth", "aud": "goodfood-api", "exp": time.Now().Add(time.Hour).Unix()}).SignedString([]byte("secret"))
 	require.NoError(t, err)
 	req := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)

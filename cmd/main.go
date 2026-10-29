@@ -63,7 +63,8 @@ func main() {
 		restaurantclient.New(cfg.FranchiseURL),
 	)
 
-	router := httpadapter.NewRouter(httpadapter.NewChatHandler(uc), httpadapter.NewAdminHandler(aiConfig), cfg.JWTSecret, log)
+	router := httpadapter.NewRouter(httpadapter.NewChatHandler(uc), httpadapter.NewAdminHandler(aiConfig),
+		httpadapter.JWTConfig{Secret: cfg.JWTSecret, Issuer: cfg.JWTIssuer, Audience: cfg.JWTAudience}, log)
 
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 	log.Info().Str("port", cfg.Port).Msg("assistant-service started")
