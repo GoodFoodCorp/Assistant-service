@@ -87,7 +87,7 @@ func Auth(cfg JWTConfig) func(http.Handler) http.Handler {
 
 			// Keep the raw token: it is forwarded to order-service so the
 			// assistant only ever sees the calling customer's own orders.
-			actor := application.Actor{Token: tokenString}
+			actor := application.Actor{Token: tokenString, ClientIP: clientIP(r)}
 			if sub, ok := claims["sub"].(string); ok {
 				actor.UserID = sub
 			}

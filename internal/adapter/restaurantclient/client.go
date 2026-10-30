@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"goodfood/assistant-service/internal/domain"
@@ -61,4 +62,67 @@ func (c *Client) ListRestaurants(ctx context.Context) ([]domain.RestaurantSummar
 		}
 	}
 	return out, nil
+}
+
+type quoteResponse struct {
+	CanOrder                 bool     `json:"canOrder"`
+	Refusal                  *string  `json:"refusal"`
+	DistanceKm               *float64 `json:"distanceKm"`
+	DeliveryFeeCents         int64    `json:"deliveryFeeCents"`
+	MinimumOrderCents        int64    `json:"minimumOrderCents"`
+	EstimatedDeliveryMinutes int      `json:"estimatedDeliveryMinutes"`
+}
+
+// Quote is the same check the cart makes before checkout (public endpoint).
+func (c *Client) Quote(ctx context.Context, restaurantID, address string) (*domain.DeliveryQuote, error) {
+	var q quoteResponse
+	path := "/api/restaurants/" + url.PathEscape(restaurantID) + "/quote?address=" + url.QueryEscape(address)
+	if err := c.get(ctx, path, &q); err != nil {
+		return nil, err
+	}
+	out := &domain.DeliveryQuote{
+		CanOrder: q.CanOrder, DistanceKm: q.DistanceKm, DeliveryFeeCents: q.DeliveryFeeCents,
+		MinimumOrderCents: q.MinimumOrderCents, EstimatedMinutes: q.EstimatedDeliveryMinutes,
+	}
+	if q.Refusal != nil {
+		out.Refusal = *q.Refusal
+	}
+	return out, nil
+}
+
+type suggestionResponse struct {
+	Label string `json:"label"`
+}
+
+func (c *Client) SuggestAddress(ctx context.Context, text, clientIP string) (string, error) {
+	var list []suggestionResponse
+	if err := c.get(ctx, "/api/restaurants/address-suggestions?limit=1&q="+url.QueryEscape(text), &list, clientIP); err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "", nil
+	}
+	return list[0].Label, nil
+}
+
+func (c *Client) get(ctx context.Context, path string, out any, clientIP ...string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	if len(clientIP) > 0 && clientIP[0] != "" {
+		req.Header.Set("X-Forwarded-For", clientIP[0])
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("franchise-service unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("franchise-service returned %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("invalid franchise-service response: %w", err)
+	}
+	return nil
 }
