@@ -115,3 +115,22 @@ func TestNewProvider_DemoAlias(t *testing.T) {
 		t.Fatalf("got %T / %+v", p, d)
 	}
 }
+
+func TestNewProvider_Azure(t *testing.T) {
+	p, desc, err := NewProvider(Settings{Provider: "azure", BaseURL: "https://cesi.services.ai.azure.com/api/projects/hack", APIKey: "k", Model: "gpt-5-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	if desc.BaseURL != "https://cesi.services.ai.azure.com/openai/v1" || c.model != "gpt-5-mini" || !c.completionTokens.Load() {
+		t.Errorf("desc=%+v model=%q", desc, c.model)
+	}
+	for _, s := range []Settings{
+		{Provider: "azure", APIKey: "k", Model: "m"},
+		{Provider: "azure", APIKey: "k", BaseURL: "https://cesi.openai.azure.com"},
+	} {
+		if _, _, err := NewProvider(s); err == nil {
+			t.Errorf("%+v: want an error (address and deployment are required)", s)
+		}
+	}
+}

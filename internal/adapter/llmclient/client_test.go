@@ -127,3 +127,75 @@ func TestClients_DoNotFollowRedirects(t *testing.T) {
 		}
 	}
 }
+
+// A reasoning model (GPT-5, o-series) turns down max_tokens, then any custom
+// temperature: the client adapts once and keeps the working request.
+func TestComplete_AdaptsToAReasoningModel(t *testing.T) {
+	var calls []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		calls = append(calls, got)
+		refuse := func(param string) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "Unsupported parameter: " + param, "param": param}})
+		}
+		switch {
+		case got["max_tokens"] != nil:
+			refuse("max_tokens")
+		case got["temperature"] != nil:
+			refuse("temperature")
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "ok"}}}})
+		}
+	}))
+	defer srv.Close()
+
+	if res := complete(t, srv, nil); res.Content != "ok" {
+		t.Fatalf("content = %q", res.Content)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("first answer took %d calls, want 3", len(calls))
+	}
+	c := New(srv.URL, "", "m").(*Client)
+	c.completionTokens.Store(true)
+	c.defaultTemperature.Store(true)
+	calls = nil
+	if _, err := c.Complete(context.Background(), []domain.Message{{Role: domain.RoleUser, Content: "salut"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0]["max_completion_tokens"] == nil {
+		t.Errorf("learned client sent %v", calls)
+	}
+}
+
+func TestComplete_GivesUpWhenTheRefusalIsNotAboutParameters(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "bad model"}})
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "", "m").Complete(context.Background(), []domain.Message{{Role: domain.RoleUser, Content: "hi"}}, nil)
+	if err == nil || err.Error() != "bad model" || n != 1 {
+		t.Errorf("err=%v calls=%d", err, n)
+	}
+}
+
+func TestAzureAddressesUseTheV1API(t *testing.T) {
+	cases := map[string]string{
+		"https://cesi.services.ai.azure.com/api/projects/hack": "https://cesi.services.ai.azure.com/openai/v1",
+		"https://cesi.openai.azure.com":                        "https://cesi.openai.azure.com/openai/v1",
+		"https://cesi.cognitiveservices.azure.com/openai/":     "https://cesi.cognitiveservices.azure.com/openai/v1",
+		"https://cesi.openai.azure.com/openai/v1/":             "https://cesi.openai.azure.com/openai/v1",
+		"https://api.openai.com/v1":                            "https://api.openai.com/v1",
+		"http://host.docker.internal:11434/v1":                 "http://host.docker.internal:11434/v1",
+	}
+	for in, want := range cases {
+		if got := newClient(in, "", "m", 0).baseURL; got != want {
+			t.Errorf("%s -> %s, want %s", in, got, want)
+		}
+	}
+}
