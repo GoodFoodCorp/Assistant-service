@@ -94,15 +94,16 @@ type suggestionResponse struct {
 	Label string `json:"label"`
 }
 
-func (c *Client) SuggestAddress(ctx context.Context, text, clientIP string) (string, error) {
+func (c *Client) SuggestAddresses(ctx context.Context, text, clientIP string) ([]string, error) {
 	var list []suggestionResponse
-	if err := c.get(ctx, "/api/restaurants/address-suggestions?limit=1&q="+url.QueryEscape(text), &list, clientIP); err != nil {
-		return "", err
+	if err := c.get(ctx, "/api/restaurants/address-suggestions?limit=5&q="+url.QueryEscape(text), &list, clientIP); err != nil {
+		return nil, err
 	}
-	if len(list) == 0 {
-		return "", nil
+	labels := make([]string, 0, len(list))
+	for _, s := range list {
+		labels = append(labels, s.Label)
 	}
-	return list[0].Label, nil
+	return labels, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, out any, clientIP ...string) error {

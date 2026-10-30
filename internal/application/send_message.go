@@ -693,6 +693,10 @@ func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, cctx chatC
 		RestaurantID: restaurantID, RestaurantName: restaurantName, Items: items, DeliveryAddress: address,
 		TotalAmountCents: totalCents,
 	}
+	if proposal.RestaurantName == "" {
+		proposal.RestaurantName = uc.restaurantName(ctx, restaurantID)
+		restaurantName = proposal.RestaurantName
+	}
 	if uc.delivery != nil {
 		proposal.DeliveryAddress = uc.preciseAddress(ctx, actor, address)
 		quote, err := uc.delivery.Quote(ctx, restaurantID, proposal.DeliveryAddress)
@@ -715,46 +719,71 @@ func (uc *UseCases) resolveProposal(ctx context.Context, actor Actor, cctx chatC
 // preciseAddress swaps the typed address for the matching street address, so
 // the restaurant and the courier get a clean one. A suggestion is only taken
 // when it keeps every number the customer typed (house number, postcode):
-// otherwise it is another address, and the typed one stays.
+// otherwise it is another address (or just the street), and the typed one stays.
 func (uc *UseCases) preciseAddress(ctx context.Context, actor Actor, typed string) string {
-	found, err := uc.delivery.SuggestAddress(ctx, typed, actor.ClientIP)
-	if err != nil || found == "" {
+	found, err := uc.delivery.SuggestAddresses(ctx, typed, actor.ClientIP)
+	if err != nil {
 		return typed
 	}
-	have := map[string]bool{}
-	for _, n := range addressNumbers.FindAllString(found, -1) {
-		have[n] = true
-	}
-	for _, n := range addressNumbers.FindAllString(typed, -1) {
-		if !have[n] {
-			return typed
+	typedNumbers := addressNumbers.FindAllString(typed, -1)
+	for _, label := range found {
+		if keepsNumbers(label, typedNumbers) {
+			return label
 		}
 	}
-	return found
+	return typed
+}
+
+func keepsNumbers(label string, numbers []string) bool {
+	have := map[string]bool{}
+	for _, n := range addressNumbers.FindAllString(label, -1) {
+		have[n] = true
+	}
+	for _, n := range numbers {
+		if !have[n] {
+			return false
+		}
+	}
+	return true
 }
 
 var addressNumbers = regexp.MustCompile(`\d+`)
 
+// restaurantName names the restaurant open on screen; "" if it cannot be found.
+func (uc *UseCases) restaurantName(ctx context.Context, id string) string {
+	list, err := uc.restaurants.ListRestaurants(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, r := range list {
+		if r.ID == id {
+			return r.Name
+		}
+	}
+	return ""
+}
+
 // deliveryRefusal explains, in the customer's words, why the restaurant cannot
 // take this order now; "" when it can.
 func deliveryRefusal(q *domain.DeliveryQuote, restaurant string, subtotalCents int64) string {
+	subject, of := restaurant, restaurant
 	if restaurant == "" {
-		restaurant = "Ce restaurant"
+		subject, of = "Ce restaurant", "ce restaurant"
 	}
 	switch {
 	case q.Refusal == "UNKNOWNADDRESS":
 		return "Je ne trouve pas cette adresse. Peux-tu la préciser : numéro, rue, code postal et ville ?"
 	case q.Refusal == "OUTOFZONE":
 		if q.DistanceKm != nil {
-			return fmt.Sprintf("Cette adresse est à %.1f km : c'est hors de la zone de livraison de %s. Tu peux choisir un autre restaurant ou une autre adresse.", *q.DistanceKm, restaurant)
+			return fmt.Sprintf("Cette adresse est à %.1f km : c'est hors de la zone de livraison de %s. Tu peux choisir un autre restaurant ou une autre adresse.", *q.DistanceKm, of)
 		}
-		return fmt.Sprintf("Cette adresse est hors de la zone de livraison de %s. Tu peux choisir un autre restaurant ou une autre adresse.", restaurant)
+		return fmt.Sprintf("Cette adresse est hors de la zone de livraison de %s. Tu peux choisir un autre restaurant ou une autre adresse.", of)
 	case q.Refusal == "CLOSED":
-		return fmt.Sprintf("%s est fermé en ce moment : la commande n'est pas possible. Tu peux choisir un autre restaurant.", restaurant)
+		return fmt.Sprintf("%s est fermé en ce moment : la commande n'est pas possible. Tu peux choisir un autre restaurant.", subject)
 	case q.Refusal == "PAUSED":
-		return fmt.Sprintf("%s ne prend plus de commandes pour l'instant. Réessaie un peu plus tard ou choisis un autre restaurant.", restaurant)
+		return fmt.Sprintf("%s ne prend plus de commandes pour l'instant. Réessaie un peu plus tard ou choisis un autre restaurant.", subject)
 	case !q.CanOrder:
-		return fmt.Sprintf("%s ne peut pas prendre de commande en ce moment. Tu peux choisir un autre restaurant.", restaurant)
+		return fmt.Sprintf("%s ne peut pas prendre de commande en ce moment. Tu peux choisir un autre restaurant.", subject)
 	case subtotalCents < q.MinimumOrderCents:
 		return fmt.Sprintf("Le minimum pour une livraison est de %.2f€ (ta sélection : %.2f€). Tu veux ajouter quelque chose ?",
 			float64(q.MinimumOrderCents)/100, float64(subtotalCents)/100)

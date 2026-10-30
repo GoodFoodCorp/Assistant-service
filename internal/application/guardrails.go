@@ -122,7 +122,7 @@ var (
 
 	instructionTerms = newTerms(
 		"ton prompt", "ton system", "system prompt", "prompt systeme", "tes instructions", "tes consignes",
-		"tes regles internes", "tes regles de fonctionnement", "ignore tes", "ignore les instructions", "ignore previous", "system message",
+		"tes regles internes", "tes regles de fonctionnement", "ignore tes", "ignore les instructions", "ignore previous", "system message", "message systeme", "messages systeme",
 		"your prompt", "your instructions",
 		"oublie tes", "oublie les instructions", "oublie toutes", "oublie tout ce", "forget your", "forget all", "forget previous",
 		"nouvelles instructions", "nouvelle consigne", "new instructions", "ignore all", "ignore the above", "disregard",
