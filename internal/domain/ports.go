@@ -56,7 +56,7 @@ type RestaurantsProvider interface {
 // the restaurant can deliver this address now, and what the address really is.
 type DeliveryChecker interface {
 	Quote(ctx context.Context, restaurantID, address string) (*DeliveryQuote, error)
-	// SuggestAddress returns the best matching street address, "" for none.
+	// SuggestAddresses returns the matching street addresses, best first.
 	// clientIP is the customer's: the lookup is rate limited per client.
-	SuggestAddress(ctx context.Context, text, clientIP string) (string, error)
+	SuggestAddresses(ctx context.Context, text, clientIP string) ([]string, error)
 }

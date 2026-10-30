@@ -14,7 +14,7 @@ import (
 type fakeDelivery struct {
 	quote     *domain.DeliveryQuote
 	err       error
-	suggested string
+	suggested []string
 	quotedFor string
 }
 
@@ -23,7 +23,7 @@ func (f *fakeDelivery) Quote(_ context.Context, _, address string) (*domain.Deli
 	return f.quote, f.err
 }
 
-func (f *fakeDelivery) SuggestAddress(_ context.Context, _, _ string) (string, error) {
+func (f *fakeDelivery) SuggestAddresses(_ context.Context, _, _ string) ([]string, error) {
 	return f.suggested, nil
 }
 
@@ -182,7 +182,7 @@ func TestProposalIsCheckedWithTheRestaurant(t *testing.T) {
 		quote *domain.DeliveryQuote
 		want  string
 	}{
-		"out of zone": {&domain.DeliveryQuote{Refusal: "OUTOFZONE", DistanceKm: &km}, "9.4 km"},
+		"out of zone": {&domain.DeliveryQuote{Refusal: "OUTOFZONE", DistanceKm: &km}, "de livraison de Good Food Montparnasse"},
 		"closed":      {&domain.DeliveryQuote{Refusal: "CLOSED"}, "fermé"},
 		"paused":      {&domain.DeliveryQuote{Refusal: "PAUSED"}, "ne prend plus de commandes"},
 		"unknown":     {&domain.DeliveryQuote{Refusal: "UNKNOWNADDRESS"}, "Je ne trouve pas cette adresse"},
@@ -191,6 +191,7 @@ func TestProposalIsCheckedWithTheRestaurant(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			uc, _ := proposeBurger(t, "10 rue de Rennes 75006 Paris")
+			uc.restaurants = &fakeRestaurants{list: []domain.RestaurantSummary{{ID: "r1", Name: "Good Food Montparnasse"}}}
 			uc.WithDeliveryChecks(&fakeDelivery{quote: tc.quote})
 			out, err := say(uc, customer, domain.Message{Role: domain.RoleUser, Content: "2 burgers au 10 rue de Rennes"})
 			require.NoError(t, err)
@@ -203,8 +204,9 @@ func TestProposalIsCheckedWithTheRestaurant(t *testing.T) {
 func TestProposalCarriesTheCheckedAddressFeeAndPayment(t *testing.T) {
 	uc, payments := proposeBurger(t, "10 rue de rennes 75006 paris")
 	delivery := &fakeDelivery{
-		quote:     &domain.DeliveryQuote{CanOrder: true, DeliveryFeeCents: 299, EstimatedMinutes: 35},
-		suggested: "10 Rue de Rennes, 75006 Paris, France",
+		quote: &domain.DeliveryQuote{CanOrder: true, DeliveryFeeCents: 299, EstimatedMinutes: 35},
+		// The street alone comes first: it lost the house number.
+		suggested: []string{"Rue de Rennes, 75006 Paris, France", "10 Rue de Rennes, 75006 Paris, France"},
 	}
 	uc.WithDeliveryChecks(delivery)
 	payments.method = ""
@@ -213,7 +215,7 @@ func TestProposalCarriesTheCheckedAddressFeeAndPayment(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.Proposal)
 	assert.Equal(t, "10 Rue de Rennes, 75006 Paris, France", out.Proposal.DeliveryAddress)
-	assert.Equal(t, delivery.suggested, delivery.quotedFor, "the restaurant checks the clean address")
+	assert.Equal(t, "10 Rue de Rennes, 75006 Paris, France", delivery.quotedFor, "the restaurant checks the clean address")
 	assert.EqualValues(t, 299, out.Proposal.DeliveryFeeCents)
 	assert.True(t, out.Proposal.NeedsCard)
 	assert.Contains(t, out.Content, "Total : 28.97€")
@@ -224,7 +226,7 @@ func TestASuggestionWithOtherNumbersIsNotTaken(t *testing.T) {
 	uc, _ := proposeBurger(t, "12 rue de Rennes 75006 Paris")
 	uc.WithDeliveryChecks(&fakeDelivery{
 		quote:     &domain.DeliveryQuote{CanOrder: true, EstimatedMinutes: 30},
-		suggested: "1 Rue de Rennes, 35000 Rennes, France",
+		suggested: []string{"1 Rue de Rennes, 35000 Rennes, France", "Rue de Rennes, 75006 Paris, France"},
 	})
 	out, err := say(uc, customer, domain.Message{Role: domain.RoleUser, Content: "2 burgers"})
 	require.NoError(t, err)
