@@ -36,6 +36,9 @@ type preset struct {
 	model    string
 	needsKey bool
 	native   string // non-empty: a dedicated adapter instead of the OpenAI-compatible client
+	// completionTokens: the API takes max_completion_tokens (any model,
+	// reasoning ones included), so no call is lost learning it.
+	completionTokens bool
 }
 
 // Every provider except Anthropic speaks the OpenAI "chat completions"
@@ -44,7 +47,7 @@ type preset struct {
 var presets = map[string]preset{
 	"ollama":     {baseURL: "http://host.docker.internal:11434/v1", model: "qwen2.5:7b"},
 	"lmstudio":   {baseURL: "http://host.docker.internal:1234/v1", model: "local-model"},
-	"openai":     {baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", needsKey: true},
+	"openai":     {baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", needsKey: true, completionTokens: true},
 	"openrouter": {baseURL: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", needsKey: true},
 	"groq":       {baseURL: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", needsKey: true},
 	"mistral":    {baseURL: "https://api.mistral.ai/v1", model: "mistral-small-latest", needsKey: true},
@@ -52,6 +55,9 @@ var presets = map[string]preset{
 	"together":   {baseURL: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", needsKey: true},
 	"gemini":     {baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.0-flash", needsKey: true},
 	"anthropic":  {baseURL: "https://api.anthropic.com", model: "claude-haiku-5-5", needsKey: true, native: "anthropic"},
+	// Azure OpenAI / AI Foundry: no default, the address is the resource's
+	// own and the model is the deployment name.
+	"azure": {needsKey: true, completionTokens: true},
 }
 
 // NewProvider builds the configured backend.
@@ -103,6 +109,12 @@ func NewProvider(s Settings) (domain.LLMProvider, Description, error) {
 	if model == "" {
 		model = p.model
 	}
+	if baseURL == "" {
+		return nil, Description{}, fmt.Errorf("AI_BASE_URL is required for AI_PROVIDER=%s", name)
+	}
+	if model == "" {
+		return nil, Description{}, fmt.Errorf("AI_MODEL is required for AI_PROVIDER=%s", name)
+	}
 
 	if p.native == "anthropic" {
 		a := &anthropicClient{
@@ -112,6 +124,7 @@ func NewProvider(s Settings) (domain.LLMProvider, Description, error) {
 		return a, Description{Provider: name, BaseURL: a.baseURL, Model: model}, nil
 	}
 	c := newClient(baseURL, apiKey, model, timeout)
+	c.completionTokens.Store(p.completionTokens)
 	return c, Description{Provider: name, BaseURL: c.baseURL, Model: model}, nil
 }
 
