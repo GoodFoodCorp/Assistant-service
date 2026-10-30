@@ -9,6 +9,9 @@ const (
 type Message struct {
 	Role    string
 	Content string
+	// Signature proves an assistant turn sent back by the browser was written
+	// by this service (see application.HistorySigner).
+	Signature string
 }
 
 // OrderSummary is the slice of an order relevant to the assistant's context —
@@ -75,6 +78,33 @@ type OrderProposal struct {
 	RestaurantName   string // set when the customer chose the restaurant in the conversation
 	Items            []ProposedItem
 	DeliveryAddress  string
-	TotalAmountCents int64
+	TotalAmountCents int64  // the dishes only
 	PaymentMethod    string // e.g. "Visa •••• 4242" — informational only
+	// Checked with the restaurant for this address when the proposal is made.
+	DeliveryFeeCents int64
+	EstimatedMinutes int
+	// NeedsCard: the customer has no saved card, payment happens in the cart.
+	NeedsCard bool
+}
+
+// DishCard is a real menu item the assistant's reply talks about, shown as a
+// clickable card. Always taken from the menu, never from the model.
+type DishCard struct {
+	ID             string
+	RestaurantID   string
+	RestaurantName string
+	Name           string
+	Description    string
+	Category       string
+	PriceCents     int64
+}
+
+// DeliveryQuote is the restaurant's answer for one address, right now.
+type DeliveryQuote struct {
+	CanOrder          bool
+	Refusal           string // INACTIVE, CLOSED, PAUSED, OUTOFZONE, UNKNOWNADDRESS
+	DistanceKm        *float64
+	DeliveryFeeCents  int64
+	MinimumOrderCents int64
+	EstimatedMinutes  int
 }

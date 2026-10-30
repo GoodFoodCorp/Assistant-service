@@ -46,14 +46,13 @@ func TestPromptHoldsTheRealServiceFacts(t *testing.T) {
 	uc, llm, _, _, _, _ := setup()
 	system := systemPromptFor(t, uc, llm, "bonjour")
 
-	assert.Contains(t, system, "3,99 €", "delivery fee")
-	assert.Contains(t, system, "30 €", "free delivery threshold")
+	assert.Contains(t, system, "dépendent du restaurant et de la distance", "delivery fee: checked per address")
 	assert.Contains(t, system, "Mes commandes")
 	assert.Contains(t, system, "Réservations")
 	assert.Contains(t, system, "contact@goodfood.fr")
 	assert.Contains(t, system, "Tu ne sais PAS", "and an explicit list of what it does not know")
 	assert.Contains(t, system, "horaires d'ouverture")
-	assert.Contains(t, system, "Tu ne peux PAS annuler, modifier ni rembourser")
+	assert.Contains(t, system, "tu ne peux PAS annuler, modifier ni rembourser")
 }
 
 // ── Order status is real data it may report ─────────────────
@@ -568,14 +567,14 @@ func TestAStatusAnswerWithAnInventedIdIsStillBlocked(t *testing.T) {
 // ── Intents where a small model invents interface and facts ─
 
 func TestCancelModifyRefundGetAReminderThatTheAssistantCannotDoIt(t *testing.T) {
-	// Regression: "je veux annuler ma commande" → "cliquez sur le bouton Annuler"
-	// (no such button); "changer l'adresse" → "vous y trouverez les options" (none).
+	// Regression: "changer l'adresse" → "vous y trouverez les options" (none).
+	// The assistant itself can do none of it; only the order page cancels.
 	for _, q := range []string{"je veux annuler ma commande", "je veux changer l'adresse de ma commande", "rembourse moi", "modifier ma commande"} {
 		t.Run(q, func(t *testing.T) {
 			uc, llm, _, _, _, _ := setup()
 			system := systemPromptFor(t, uc, llm, q)
 			assert.Contains(t, system, "Le client veut annuler, modifier ou se faire rembourser")
-			assert.Contains(t, system, "AUCUN bouton")
+			assert.Contains(t, system, "Toi, tu ne peux faire aucune de ces actions")
 		})
 	}
 }
@@ -615,15 +614,15 @@ func TestDietQuestionsMayListDishesWhoseDisplayedCompositionFits(t *testing.T) {
 // ── Cancelling: what the product really offers ──────────────
 
 func TestCancellationGuidanceMatchesTheProduct(t *testing.T) {
-	// The order page has no cancel button and no way to change the address (the
-	// help-center FAQ suggests otherwise). Sending a customer to "Mes commandes"
-	// to cancel sends them to a dead end.
+	// The customer cancels from the order page (with a reason) until the
+	// restaurant starts; after that, only the support can help. The address can
+	// never be changed.
 	uc, llm, _, _, _, _ := setup()
 	system := systemPromptFor(t, uc, llm, "je veux annuler ma commande")
 
-	assert.Contains(t, system, "pas de bouton d'annulation")
+	assert.Contains(t, system, "« Annuler la commande »")
+	assert.Contains(t, system, "trop tard pour annuler")
 	assert.Contains(t, system, "support")
-	assert.NotContains(t, system, "dis-lui d'aller sur « Mes commandes »", "no cancel button there")
 	assert.Contains(t, system, "adresse de livraison ne peut pas être modifiée")
 }
 

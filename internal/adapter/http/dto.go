@@ -9,8 +9,9 @@ import (
 )
 
 type chatMessageRequest struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type sendMessageRequest struct {
@@ -21,7 +22,7 @@ type sendMessageRequest struct {
 func (r sendMessageRequest) toMessages() []domain.Message {
 	out := make([]domain.Message, 0, len(r.Messages))
 	for _, m := range r.Messages {
-		out = append(out, domain.Message{Role: m.Role, Content: m.Content})
+		out = append(out, domain.Message{Role: m.Role, Content: m.Content, Signature: m.Signature})
 	}
 	return out
 }
@@ -40,6 +41,9 @@ type orderProposalResponse struct {
 	DeliveryAddress  string                 `json:"delivery_address"`
 	TotalAmountCents int64                  `json:"total_amount_cents"`
 	PaymentMethod    string                 `json:"payment_method,omitempty"`
+	DeliveryFeeCents int64                  `json:"delivery_fee_cents"`
+	EstimatedMinutes int                    `json:"estimated_minutes,omitempty"`
+	NeedsCard        bool                   `json:"needs_card,omitempty"`
 }
 
 func toProposalResponse(p *domain.OrderProposal) *orderProposalResponse {
@@ -56,6 +60,7 @@ func toProposalResponse(p *domain.OrderProposal) *orderProposalResponse {
 	return &orderProposalResponse{
 		RestaurantID: p.RestaurantID, RestaurantName: p.RestaurantName, Items: items, DeliveryAddress: p.DeliveryAddress,
 		TotalAmountCents: p.TotalAmountCents, PaymentMethod: p.PaymentMethod,
+		DeliveryFeeCents: p.DeliveryFeeCents, EstimatedMinutes: p.EstimatedMinutes, NeedsCard: p.NeedsCard,
 	}
 }
 
@@ -66,10 +71,36 @@ type restaurantChoiceResponse struct {
 }
 
 type sendMessageResponse struct {
-	Role     string                     `json:"role"`
-	Content  string                     `json:"content"`
-	Proposal *orderProposalResponse     `json:"proposal,omitempty"`
-	Choices  []restaurantChoiceResponse `json:"choices,omitempty"`
+	Role      string                     `json:"role"`
+	Content   string                     `json:"content"`
+	Proposal  *orderProposalResponse     `json:"proposal,omitempty"`
+	Choices   []restaurantChoiceResponse `json:"choices,omitempty"`
+	Dishes    []dishCardResponse         `json:"dishes,omitempty"`
+	Signature string                     `json:"signature,omitempty"`
+}
+
+type dishCardResponse struct {
+	ID             string `json:"id"`
+	RestaurantID   string `json:"restaurant_id"`
+	RestaurantName string `json:"restaurant_name,omitempty"`
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	Category       string `json:"category,omitempty"`
+	PriceCents     int64  `json:"price_cents"`
+}
+
+func toDishesResponse(list []domain.DishCard) []dishCardResponse {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]dishCardResponse, 0, len(list))
+	for _, d := range list {
+		out = append(out, dishCardResponse{
+			ID: d.ID, RestaurantID: d.RestaurantID, RestaurantName: d.RestaurantName, Name: d.Name,
+			Description: d.Description, Category: d.Category, PriceCents: d.PriceCents,
+		})
+	}
+	return out
 }
 
 func toChoicesResponse(list []domain.RestaurantSummary) []restaurantChoiceResponse {

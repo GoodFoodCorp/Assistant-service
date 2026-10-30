@@ -61,10 +61,12 @@ func main() {
 		paymentclient.New(cfg.PaymentServiceURL),
 		userclient.New(cfg.UserServiceURL),
 		restaurantclient.New(cfg.FranchiseURL),
-	)
+	).WithDeliveryChecks(restaurantclient.New(cfg.FranchiseURL)).
+		WithHistorySigner(application.NewHistorySigner(cfg.HistoryKey))
 
 	router := httpadapter.NewRouter(httpadapter.NewChatHandler(uc), httpadapter.NewAdminHandler(aiConfig),
-		httpadapter.JWTConfig{Secret: cfg.JWTSecret, Issuer: cfg.JWTIssuer, Audience: cfg.JWTAudience}, log)
+		httpadapter.JWTConfig{Secret: cfg.JWTSecret, Issuer: cfg.JWTIssuer, Audience: cfg.JWTAudience},
+		httpadapter.NewRateLimiter(cfg.ChatPerMinute, cfg.ChatBurst), log)
 
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 	log.Info().Str("port", cfg.Port).Msg("assistant-service started")

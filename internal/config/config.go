@@ -24,6 +24,11 @@ type Config struct {
 	UserServiceURL    string
 	FranchiseURL      string
 	LogLevel          string
+	// HistoryKey signs the replies the browser sends back (JWT_SECRET if unset).
+	HistoryKey string
+	// Chat messages per customer: ChatPerMinute steady, ChatBurst at once.
+	ChatPerMinute int
+	ChatBurst     int
 }
 
 // Load reads typed configuration from environment variables only.
@@ -48,6 +53,9 @@ func Load() (*Config, error) {
 		UserServiceURL:    getEnv("USER_SERVICE_URL", "http://user-service:8087"),
 		FranchiseURL:      getEnv("FRANCHISE_SERVICE_URL", "http://franchise-service:8089"),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		HistoryKey:        getEnv("ASSISTANT_HISTORY_KEY", os.Getenv("JWT_SECRET")),
+		ChatPerMinute:     getEnvInt("CHAT_MESSAGES_PER_MINUTE", 12),
+		ChatBurst:         getEnvInt("CHAT_MESSAGES_BURST", 6),
 	}
 	timeout, err := parseTimeoutSeconds(os.Getenv("AI_TIMEOUT_SECONDS"))
 	if err != nil {
@@ -78,4 +86,11 @@ func parseTimeoutSeconds(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("AI_TIMEOUT_SECONDS must be a positive integer, got %q", raw)
 	}
 	return time.Duration(n) * time.Second, nil
+}
+
+func getEnvInt(key string, fallback int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
 }

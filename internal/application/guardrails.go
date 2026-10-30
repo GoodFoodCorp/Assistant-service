@@ -41,7 +41,7 @@ Cette question semble hors du périmètre de Good Food : décline en UNE phrase 
 
 	cancelReminder = `
 
-Le client veut annuler, modifier ou se faire rembourser une commande. Tu ne peux faire aucune de ces actions, et tu ne dois décrire AUCUN bouton ni option de l'interface : il n'y en a pas. Regarde le statut de sa commande dans la liste : s'il est « enregistrée » ou « payée et acceptée » (pas encore en préparation), une annulation reste possible mais seulement via le support — dis-lui de les contacter tout de suite (contact@goodfood.fr, +33 1 23 45 67 89) ; sinon (en préparation, en livraison, livrée), dis-lui que c'est trop tard pour annuler et de contacter le support. Une adresse de livraison ne peut pas être modifiée une fois la commande passée, et un remboursement se demande au support.`
+Le client veut annuler, modifier ou se faire rembourser une commande. Toi, tu ne peux faire aucune de ces actions. Regarde le statut de sa commande dans la liste : s'il est « enregistrée » ou « payée et acceptée » (pas encore en préparation), il peut l'annuler lui-même tout de suite depuis la page de la commande, dans « Mes commandes », bouton « Annuler la commande », en choisissant un motif : il est remboursé intégralement. Sinon (en préparation, en livraison, livrée), c'est trop tard pour annuler : dis-lui de contacter le support (contact@goodfood.fr, +33 1 23 45 67 89). Une adresse de livraison ne peut pas être modifiée une fois la commande passée, et un autre remboursement se demande au support.`
 
 	unknownInfoReminder = `
 
@@ -124,6 +124,11 @@ var (
 		"ton prompt", "ton system", "system prompt", "prompt systeme", "tes instructions", "tes consignes",
 		"tes regles internes", "tes regles de fonctionnement", "ignore tes", "ignore les instructions", "ignore previous", "system message",
 		"your prompt", "your instructions",
+		"oublie tes", "oublie les instructions", "oublie toutes", "oublie tout ce", "forget your", "forget all", "forget previous",
+		"nouvelles instructions", "nouvelle consigne", "new instructions", "ignore all", "ignore the above", "disregard",
+		"jailbreak", "mode developpeur", "developer mode", "dan mode", "mode dan", "mode sans restriction", "sans restrictions",
+		"agis comme", "act as", "pretend", "fais semblant", "joue le role", "role play", "roleplay",
+		"tu n'es plus", "you are now", "repete tout", "repeat everything", "texte ci-dessus", "above text",
 	)
 )
 

@@ -34,7 +34,7 @@ func adminRouter(t *testing.T) http.Handler {
 			return p, err
 		})
 	require.NoError(t, cfg.Init())
-	return NewRouter(NewChatHandler(application.NewUseCases(sw, nil, nil, nil, nil, nil)), NewAdminHandler(cfg), JWTConfig{Secret: "secret", Issuer: "goodfood-auth", Audience: "goodfood-api"}, zerolog.Nop())
+	return NewRouter(NewChatHandler(application.NewUseCases(sw, nil, nil, nil, nil, nil)), NewAdminHandler(cfg), JWTConfig{Secret: "secret", Issuer: "goodfood-auth", Audience: "goodfood-api"}, NewRateLimiter(60, 10), zerolog.Nop())
 }
 
 func call(t *testing.T, h http.Handler, method, path, role, body string) *httptest.ResponseRecorder {
