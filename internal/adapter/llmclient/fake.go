@@ -8,7 +8,7 @@ import (
 )
 
 // FakeProvider stands in for a real AI endpoint when none is configured
-// (AI_BASE_URL empty), so the chat widget stays demoable offline. It gives a
+// (no provider set, by the environment or the admin), so the chat widget stays demoable offline. It gives a
 // canned but context-aware-looking reply based on simple keyword matching —
 // no real language understanding, purely a demo stand-in.
 type FakeProvider struct{}
@@ -26,18 +26,20 @@ func (f *FakeProvider) Complete(_ context.Context, messages []domain.Message, _ 
 		}
 	}
 
+	// Customers read these: no configuration talk, the admin sets the AI up
+	// from the back-office.
 	var content string
 	switch {
 	case strings.Contains(lastUser, "veux") || strings.Contains(lastUser, "commande-moi") || strings.Contains(lastUser, "achète"):
-		content = "Je suis en mode démo (pas d'IA connectée), donc je ne peux pas préparer de commande pour vous ici — configurez AI_BASE_URL avec un modèle qui gère les function calls (ex. llama3.2 via Ollama) pour activer la commande par chat. En attendant, utilisez le panier."
+		content = "La commande par le chat n'est pas encore disponible. Choisissez un restaurant, ajoutez vos plats au panier et validez : c'est rapide !"
 	case strings.Contains(lastUser, "commande"):
-		content = "Je n'ai pas d'accès à un vrai modèle d'IA pour l'instant (mode démo), mais je vois le contexte de vos commandes récentes ci-dessus si vous en avez. Pour un suivi précis, consultez la page « Mes commandes »."
+		content = "Vous suivez vos commandes en temps réel sur la page « Mes commandes » : statut, livreur et détail de chaque commande."
 	case strings.Contains(lastUser, "menu") || strings.Contains(lastUser, "plat"):
-		content = "Je suis en mode démo (pas d'IA connectée), mais le menu du restaurant que vous consultez est listé dans mon contexte. Je vous invite aussi à parcourir la page du restaurant pour tous les détails."
+		content = "Ouvrez la page d'un restaurant pour voir sa carte complète, avec les prix et les plats disponibles en ce moment."
 	case strings.Contains(lastUser, "promo") || strings.Contains(lastUser, "code"):
-		content = "Les codes promo sont saisissables directement dans le panier, dans le champ « Code promo ». Je suis en mode démo, donc je ne peux pas en générer un pour vous ici."
+		content = "Les codes promo se saisissent dans le panier, dans le champ « Code promo »."
 	default:
-		content = "Bonjour ! Je suis l'assistant Good Food, actuellement en mode démo (aucune IA connectée — configurez AI_BASE_URL pour brancher un vrai modèle, local ou cloud). Comment puis-je vous aider ?"
+		content = "Bonjour ! Je suis l'assistant Good Food. Je peux vous orienter vers vos commandes, les menus des restaurants ou les codes promo. Que puis-je faire pour vous ?"
 	}
 	return domain.CompletionResult{Content: content}, nil
 }
