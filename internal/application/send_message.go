@@ -434,6 +434,12 @@ type chatContext struct {
 // buildContext is best-effort: an order-service/menu-service/user-service
 // hiccup degrades the answer's context, it never fails the chat itself.
 func (uc *UseCases) buildContext(ctx context.Context, actor Actor, viewedRestaurantID string) chatContext {
+	// Staff (franchisee, courier, head office) get help with their own space;
+	// ordering, their orders and addresses are a customer's.
+	if prompt := staffPrompt(actor); prompt != "" {
+		return chatContext{prompt: prompt, mode: orderingOff, knownOrderIDs: map[string]bool{}}
+	}
+
 	var b strings.Builder
 	b.WriteString(corePrompt)
 	b.WriteString(securityInstructions())
